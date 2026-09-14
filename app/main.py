@@ -112,6 +112,11 @@ async def telegram_webhook(request: Request) -> dict[str, str]:
     message_id = message["message_id"]
     original_text = message.get("text", "")
 
+    logger.info(
+        "Callback received: data=%s chat_id=%s message_id=%s from_user_id=%s",
+        data, chat_id, message_id, from_user_id,
+    )
+
     try:
         parts = data.split(":")
         action = parts[0]
