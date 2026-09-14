@@ -14,8 +14,13 @@ async def _call(method: str, payload: dict[str, Any]) -> dict[str, Any]:
     url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/{method}"
     async with httpx.AsyncClient(timeout=15.0) as client:
         response = await client.post(url, json=payload)
-        response.raise_for_status()
+        if response.status_code >= 400:
+            raise TelegramApiError(f"{method}: {response.status_code} {response.text}")
     return response.json()
+
+
+class TelegramApiError(RuntimeError):
+    """Telegram Bot API вернул ошибку — текст ответа содержит description с причиной."""
 
 
 async def send_telegram_message(text: str, *, reply_markup: dict[str, Any] | None = None) -> dict[str, Any]:
