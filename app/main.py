@@ -102,7 +102,7 @@ async def telegram_webhook(request: Request) -> dict[str, str]:
     callback_id = callback_query["id"]
     from_user_id = callback_query["from"]["id"]
 
-    if from_user_id != settings.admin_telegram_user_id:
+    if from_user_id not in settings.admin_telegram_user_id_set:
         await answer_callback_query(callback_id, text="Нет доступа", show_alert=True)
         return {"status": "forbidden"}
 
