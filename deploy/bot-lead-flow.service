@@ -1,0 +1,15 @@
+[Unit]
+Description=bot-lead-flow
+After=network.target
+
+[Service]
+Type=simple
+User=www-data
+WorkingDirectory=/opt/bot-lead-flow
+Environment=PATH=/opt/bot-lead-flow/.venv/bin
+ExecStart=/opt/bot-lead-flow/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target
