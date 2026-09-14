@@ -73,6 +73,16 @@ class BitrixClient:
         full_name = " ".join(part for part in (user.get("NAME"), user.get("LAST_NAME")) if part)
         return full_name or user.get("EMAIL")
 
+    async def get_department_users(self, department_id: str) -> list[dict[str, Any]]:
+        """Активные сотрудники отдела — источник списка для назначения ответственного."""
+        return await self._call(
+            "user.get",
+            {"FILTER": {"UF_DEPARTMENT": department_id, "ACTIVE": True}},
+        )
+
+    async def update_lead(self, lead_id: str | int, fields: dict[str, Any]) -> None:
+        await self._call("crm.lead.update", {"id": lead_id, "fields": fields})
+
 
 class BitrixApiError(RuntimeError):
     """Битрикс вернул ошибку в теле ответа (200 OK, но {"error": ...})."""
