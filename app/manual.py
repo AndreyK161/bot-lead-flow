@@ -95,10 +95,14 @@ def card(row):
         text += '\n✖️ Передача отменена'
     elif state == 'deleted':
         text += '\n🗑 Лид удалён из Битрикса'
+    elif state == 'junk':
+        text += '\n🗑 Перенесён в «Мусор»'
+        portal = urlparse(get_settings().bitrix_webhook_url).netloc
+        text += f'\n🔗 <a href="https://{escape(portal)}/crm/lead/details/{row["lead_id"]}/">Открыть лид в CRM</a>'
     else:
         text += f'\nЛид №{escape(row["lead_id"] or "")}\n'
         text += f'✅ Назначен менеджер: {escape(row["manager"])}' if row['manager'] else '⏳ Ожидает назначения менеджера'
-        keyboard = [[button('🗑 Удалить лид', f'delete:{row["id"]}')]]
+        keyboard = [[button('🗑 В мусор', f'delete:{row["id"]}')]]
     return text, {'inline_keyboard': keyboard}
 
 
@@ -112,6 +116,15 @@ async def sync(row):
         for delivery in deliveries(row):
             await edit_message_text(delivery['chat_id'], delivery['message_id'],
                                     f'🗑 Ручной лид №{row["lead_id"]} удалён\nКонтакт: {escape(row["contact"])}', reply_markup={'inline_keyboard': []})
+    if row['dirty'] and row['lead_id'] and row['state'] == 'junk':
+        client = BitrixClient()
+        lead = await client.get_lead(row['lead_id'])
+        assigned_name = await client.get_user_name(str(lead.get('ASSIGNED_BY_ID') or ''))
+        text = build_lead_notification(lead, portal_domain=urlparse(get_settings().bitrix_webhook_url).netloc,
+                                       source_name=row['source_name'], assigned_name=assigned_name)
+        text += '\n\n🗑 Перенесён в «Мусор»'
+        for delivery in deliveries(row):
+            await edit_message_text(delivery['chat_id'], delivery['message_id'], text, reply_markup=build_manage_keyboard(row['lead_id']))
     store.save(row['id'], dirty=0)
 
 
@@ -234,15 +247,11 @@ async def handle(update):
                 await publish(store.submission(row['id']))
             elif action == 'delete' and row['state'] == 'submitted':
                 text, _ = card(row)
-                await edit(chat_id, row['message_id'], text + '\n\nУдалить этот лид из Битрикса?', {'inline_keyboard': [[button('Да, удалить', f'confirm:{row["id"]}')], [button('Оставить лид', f'keep:{row["id"]}')]]})
+                await edit(chat_id, row['message_id'], text + '\n\nПеренести этот лид на стадию «Мусор»?', {'inline_keyboard': [[button('Да, в мусор', f'confirm:{row["id"]}')], [button('Оставить лид', f'keep:{row["id"]}')]]})
                 return
             elif action == 'confirm' and row['state'] == 'submitted':
-                try:
-                    await BitrixClient().delete_lead(row['lead_id'])
-                except BitrixApiError as exc:
-                    if 'not found' not in str(exc).lower():
-                        raise
-                store.save(row['id'], state='deleted', dirty=1)
+                await BitrixClient().update_lead(row['lead_id'], {'STATUS_ID': settings.junk_status_id})
+                store.save(row['id'], state='junk', dirty=1)
             await sync(store.submission(row['id']))
             return
         text = (message.get('text') or '').strip()

@@ -5,7 +5,6 @@ from __future__ import annotations
 import logging
 import asyncio
 from contextlib import asynccontextmanager, suppress
-from html import escape
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request, status
@@ -200,9 +199,19 @@ async def telegram_webhook(request: Request) -> dict[str, str]:
         elif action == "j":
             lead_id = parts[1]
             client = BitrixClient()
-            await client.update_lead(lead_id, {"STATUS_ID": settings.junk_status_id})
-            new_text = f"{escape(original_text)}\n\n🗑 Перенесён в «Мусор»"
-            await edit_message_text(chat_id, message_id, new_text, reply_markup=build_manage_keyboard(lead_id))
+            async with manual.lock:
+                await client.update_lead(lead_id, {"STATUS_ID": settings.junk_status_id})
+                row = store.by_lead(lead_id) if settings.manual_bot_token else None
+                if row:
+                    store.save(row['id'], state='junk', dirty=1)
+                lead = await client.get_lead(lead_id)
+                source_name = await client.get_source_name(lead.get('SOURCE_ID', ''))
+                assigned_name = await client.get_user_name(str(lead.get('ASSIGNED_BY_ID') or ''))
+                new_text = build_lead_notification(lead, portal_domain=_portal_domain(settings.bitrix_webhook_url), source_name=source_name, assigned_name=assigned_name)
+                new_text += '\n\n🗑 Перенесён в «Мусор»'
+                await edit_message_text(chat_id, message_id, new_text, reply_markup=build_manage_keyboard(lead_id))
+                if row:
+                    await manual.sync(store.submission(row['id']))
             await answer_callback_query(callback_id, text="Лид перенесён в мусор")
 
         else:

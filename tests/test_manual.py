@@ -14,7 +14,7 @@ class ManualTests(unittest.IsolatedAsyncioTestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.settings = SimpleNamespace(database_path=self.tmp.name+'/db.sqlite', admin_telegram_user_id_set={123},
             manual_bot_token='test', manual_webhook_secret='secret', telegram_chat_id='-100',
-            bitrix_webhook_url='https://example.com/rest/1/test/', sales_department_id='5')
+            bitrix_webhook_url='https://example.com/rest/1/test/', sales_department_id='5', junk_status_id='JUNK')
         self.patches = [patch('app.store.get_settings', return_value=self.settings),
                         patch('app.manual.get_settings', return_value=self.settings),
                         patch('app.main.get_settings', return_value=self.settings)]
@@ -68,15 +68,31 @@ class ManualTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(store.submission(row['id'])['state'],'cancelled')
         self.client.add_lead.assert_not_awaited()
 
-    async def test_delete_requires_second_press_and_is_idempotent(self):
+    async def test_junk_requires_second_press_and_preserves_lead(self):
         row = await self.submitted()
         await manual.handle(self.callback('delete',row))
         self.client.delete_lead.assert_not_awaited()
         await manual.handle(self.callback('confirm',row,3))
         await manual.handle(self.callback('confirm',row,3))
-        self.client.delete_lead.assert_awaited_once_with('42')
-        self.assertEqual(store.submission(row['id'])['state'],'deleted')
+        self.client.delete_lead.assert_not_awaited()
+        self.client.update_lead.assert_awaited_once_with('42', {'STATUS_ID': 'JUNK'})
+        self.assertEqual(store.submission(row['id'])['state'],'junk')
         manual.edit_message_text.assert_awaited_once()
+        self.assertIn('<a href="https://example.com/crm/lead/details/42/">', manual.edit_message_text.call_args.args[2])
+
+    async def test_main_junk_preserves_crm_link_and_updates_manual_card(self):
+        row = await self.submitted()
+        cb = self.callback('j', {'id':'42'})['callback_query']
+        cb['message']['text'] = 'Новый лид\nОткрыть лид в CRM'
+        self.settings.telegram_webhook_secret = 'main-secret'
+        request = SimpleNamespace(headers={'X-Telegram-Bot-Api-Secret-Token':'main-secret'}, json=AsyncMock(return_value={'callback_query':cb}))
+        await main.telegram_webhook(request)
+        self.client.update_lead.assert_awaited_once_with('42', {'STATUS_ID':'JUNK'})
+        self.client.delete_lead.assert_not_awaited()
+        text = main.edit_message_text.call_args.args[2]
+        self.assertIn('<a href="https://example.com/crm/lead/details/42/">', text)
+        self.assertIn('Перенесён в «Мусор»',text)
+        self.assertEqual(store.submission(row['id'])['state'],'junk')
 
     async def test_sources_and_retry_toggle_persist(self):
         await manual.refresh_sources()

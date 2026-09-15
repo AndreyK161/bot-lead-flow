@@ -86,9 +86,6 @@ class BitrixClient:
     async def add_lead(self, fields: dict[str, Any]) -> str:
         return str(await self._call("crm.lead.add", {"fields": fields}))
 
-    async def delete_lead(self, lead_id: str) -> None:
-        await self._call("crm.lead.delete", {"id": lead_id})
-
     async def get_sources(self) -> list[dict[str, Any]]:
         return await self._call("crm.status.list", {"filter": {"ENTITY_ID": "SOURCE"}, "order": {"SORT": "ASC"}})
 
