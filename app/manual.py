@@ -109,20 +109,41 @@ async def sync(row):
     else:
         await edit(row['chat_id'], row['message_id'], *card(row))
     if row['dirty'] and row['lead_id'] and row['main_message_id'] and row['state'] == 'deleted':
-        await edit_message_text(get_settings().telegram_chat_id, row['main_message_id'],
-                                f'🗑 Ручной лид №{row["lead_id"]} удалён\nКонтакт: {escape(row["contact"])}', reply_markup={'inline_keyboard': []})
+        for delivery in deliveries(row):
+            await edit_message_text(delivery['chat_id'], delivery['message_id'],
+                                    f'🗑 Ручной лид №{row["lead_id"]} удалён\nКонтакт: {escape(row["contact"])}', reply_markup={'inline_keyboard': []})
     store.save(row['id'], dirty=0)
 
 
+def destinations():
+    settings = get_settings()
+    return getattr(settings, 'notification_chat_ids', [settings.telegram_chat_id])
+
+
+def deliveries(row):
+    # Migrate primary cards created before multiple recipients were supported.
+    if row['main_message_id']:
+        store.execute('INSERT OR IGNORE INTO deliveries VALUES (?,?,?)',
+                      (row['id'], str(get_settings().telegram_chat_id), row['main_message_id']))
+    return store.rows('SELECT * FROM deliveries WHERE submission_id=?', (row['id'],))
+
+
 async def publish(row):
-    if row['main_message_id'] or row['state'] != 'submitted':
+    if row['state'] != 'submitted':
+        return
+    delivered = {delivery['chat_id'] for delivery in deliveries(row)}
+    pending = [str(chat_id) for chat_id in destinations() if str(chat_id) not in delivered]
+    if not pending:
         return
     client = BitrixClient()
     lead = await client.get_lead(row['lead_id'])
     text = build_lead_notification(lead, portal_domain=urlparse(get_settings().bitrix_webhook_url).netloc,
                                    source_name=row['source_name'])
-    result = await send_telegram_message(text, reply_markup=build_manage_keyboard(row['lead_id']))
-    store.save(row['id'], main_message_id=result['message_id'])
+    for chat_id in pending:
+        result = await send_telegram_message(text, reply_markup=build_manage_keyboard(row['lead_id']), chat_id=chat_id)
+        store.execute('INSERT INTO deliveries VALUES (?,?,?)', (row['id'], chat_id, result['message_id']))
+        if chat_id == str(get_settings().telegram_chat_id):
+            store.save(row['id'], main_message_id=result['message_id'])
 
 
 async def recover():
@@ -133,10 +154,11 @@ async def recover():
                 store.save(row['id'], lead_id=str(result[0]['ID']), state='submitted', dirty=1)
             elif row['state'] == 'creating':
                 store.save(row['id'], state='uncertain', dirty=1)
-        for row in store.rows("SELECT * FROM submissions WHERE dirty=1 OR (state='submitted' AND main_message_id IS NULL)"):
+        for row in store.rows("SELECT * FROM submissions WHERE dirty=1 OR state='submitted'"):
             try:
                 await publish(row)
-                await sync(store.submission(row['id']))
+                if row['dirty']:
+                    await sync(store.submission(row['id']))
             except Exception:
                 logger.error('Manual card recovery failed for %s', row['id'])
 

@@ -125,6 +125,29 @@ class ManualTests(unittest.IsolatedAsyncioTestCase):
         await manual.handle(self.callback('cancel',row,3))
         self.assertEqual(store.submission(row['id'])['state'],'cancelled')
 
+    async def test_new_recipient_gets_existing_lead_without_resending_primary(self):
+        row = await self.submitted()
+        manual.send_telegram_message.reset_mock()
+        self.settings.notification_chat_ids = ['-100', '123']
+        await manual.recover()
+        manual.send_telegram_message.assert_awaited_once()
+        self.assertEqual(manual.send_telegram_message.call_args.kwargs['chat_id'], '123')
+        await manual.recover()
+        manual.send_telegram_message.assert_awaited_once()
+        self.client.add_lead.assert_awaited_once()
+
+    async def test_partial_delivery_retries_only_missing_recipient(self):
+        row = await self.submitted()
+        self.settings.notification_chat_ids = ['-100', '123']
+        manual.send_telegram_message.reset_mock()
+        manual.send_telegram_message.side_effect = RuntimeError('temporary Telegram failure')
+        await manual.recover()
+        self.assertEqual(len(manual.deliveries(row)), 1)
+        manual.send_telegram_message.side_effect = None
+        await manual.recover()
+        self.assertEqual(len(manual.deliveries(row)), 2)
+        self.assertEqual([call.kwargs['chat_id'] for call in manual.send_telegram_message.call_args_list], ['123', '123'])
+
 
 if __name__ == '__main__':
     unittest.main()

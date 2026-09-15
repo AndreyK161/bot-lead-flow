@@ -24,6 +24,10 @@ def db():
             id TEXT PRIMARY KEY, name TEXT NOT NULL, enabled INTEGER NOT NULL
         );
         CREATE TABLE IF NOT EXISTS source_updates (update_id INTEGER PRIMARY KEY);
+        CREATE TABLE IF NOT EXISTS deliveries (
+            submission_id TEXT NOT NULL, chat_id TEXT NOT NULL, message_id INTEGER NOT NULL,
+            PRIMARY KEY (submission_id, chat_id)
+        );
     ''')
     try:
         with conn:

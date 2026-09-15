@@ -26,18 +26,24 @@ class TelegramApiError(RuntimeError):
     """Telegram Bot API вернул ошибку — текст ответа содержит description с причиной."""
 
 
-async def send_telegram_message(text: str, *, reply_markup: dict[str, Any] | None = None) -> dict[str, Any]:
+async def send_telegram_message(text: str, *, reply_markup: dict[str, Any] | None = None, chat_id: str | int | None = None) -> dict[str, Any]:
     settings = get_settings()
     payload: dict[str, Any] = {
-        "chat_id": settings.telegram_chat_id,
+        "chat_id": chat_id or settings.telegram_chat_id,
         "text": text,
         "parse_mode": "HTML",
         "disable_web_page_preview": True,
     }
     if reply_markup is not None:
         payload["reply_markup"] = reply_markup
-    result = await _call("sendMessage", payload)
-    return result["result"]
+    destinations = [chat_id] if chat_id is not None else settings.notification_chat_ids
+    first = None
+    for destination in destinations:
+        payload['chat_id'] = destination
+        result = await _call("sendMessage", payload)
+        if first is None:
+            first = result['result']
+    return first
 
 
 async def edit_message_text(

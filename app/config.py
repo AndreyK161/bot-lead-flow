@@ -16,6 +16,11 @@ class Settings(BaseSettings):
 
     telegram_bot_token: str
     telegram_chat_id: str
+    telegram_notification_chat_ids: str = ""
+
+    @property
+    def notification_chat_ids(self) -> list[str]:
+        return list(dict.fromkeys([self.telegram_chat_id] + [x.strip() for x in self.telegram_notification_chat_ids.split(',') if x.strip()]))
 
     # Секрет, который Telegram присылает в заголовке X-Telegram-Bot-Api-Secret-Token
     # (задаётся при setWebhook) — защищает /telegram/webhook от чужих запросов
