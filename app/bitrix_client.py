@@ -29,6 +29,7 @@ LEAD_SELECT_FIELDS = [
     "UTM_TERM",
     "COMMENTS",
     "ASSIGNED_BY_ID",
+    "STATUS_ID",
 ]
 
 
@@ -82,6 +83,19 @@ class BitrixClient:
 
     async def update_lead(self, lead_id: str | int, fields: dict[str, Any]) -> None:
         await self._call("crm.lead.update", {"id": lead_id, "fields": fields})
+
+    async def move_to_junk(self, lead_id: str | int) -> dict[str, Any]:
+        """Resolve the actual CRM stage and verify that the update took effect."""
+        stages = await self._call("crm.status.list", {"filter": {"ENTITY_ID": "STATUS"}})
+        matches = [stage for stage in stages if str(stage.get("NAME", "")).strip().casefold() == "мусор"]
+        if len(matches) != 1:
+            raise BitrixApiError("Не найдена однозначная стадия «Мусор» в CRM")
+        junk_id = str(matches[0]["STATUS_ID"])
+        await self.update_lead(lead_id, {"STATUS_ID": junk_id})
+        lead = await self.get_lead(lead_id)
+        if str(lead.get("STATUS_ID")) != junk_id:
+            raise BitrixApiError("Битрикс не подтвердил перенос на стадию «Мусор»")
+        return lead
 
     async def add_lead(self, fields: dict[str, Any]) -> str:
         return str(await self._call("crm.lead.add", {"fields": fields}))

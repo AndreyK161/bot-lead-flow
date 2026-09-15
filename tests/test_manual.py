@@ -23,6 +23,7 @@ class ManualTests(unittest.IsolatedAsyncioTestCase):
         self.client.get_sources.return_value = [{'STATUS_ID': 'vk', 'NAME': 'Вконтакте'}, {'STATUS_ID': 'max', 'NAME': 'Max Станислава'}, {'STATUS_ID': 'yandex', 'NAME': 'Яндекс'}]
         self.client.add_lead.return_value = '42'
         self.client.get_lead.return_value = {'ID': '42', 'SOURCE_ID': 'vk', 'SOURCE_DESCRIPTION': manual.MARKER+'test'}
+        self.client.move_to_junk.return_value = self.client.get_lead.return_value
         self.client.get_department_users.return_value = [{'ID': '7', 'NAME': 'Иван'}]
         self.client.get_user_name.return_value = 'Иван'
         self.client.get_source_name.return_value = 'Вконтакте'
@@ -75,7 +76,7 @@ class ManualTests(unittest.IsolatedAsyncioTestCase):
         await manual.handle(self.callback('confirm',row,3))
         await manual.handle(self.callback('confirm',row,3))
         self.client.delete_lead.assert_not_awaited()
-        self.client.update_lead.assert_awaited_once_with('42', {'STATUS_ID': 'JUNK'})
+        self.client.move_to_junk.assert_awaited_once_with('42')
         self.assertEqual(store.submission(row['id'])['state'],'junk')
         manual.edit_message_text.assert_awaited_once()
         self.assertIn('<a href="https://example.com/crm/lead/details/42/">', manual.edit_message_text.call_args.args[2])
@@ -87,11 +88,12 @@ class ManualTests(unittest.IsolatedAsyncioTestCase):
         self.settings.telegram_webhook_secret = 'main-secret'
         request = SimpleNamespace(headers={'X-Telegram-Bot-Api-Secret-Token':'main-secret'}, json=AsyncMock(return_value={'callback_query':cb}))
         await main.telegram_webhook(request)
-        self.client.update_lead.assert_awaited_once_with('42', {'STATUS_ID':'JUNK'})
+        self.client.move_to_junk.assert_awaited_once_with('42')
         self.client.delete_lead.assert_not_awaited()
         text = main.edit_message_text.call_args.args[2]
         self.assertIn('<a href="https://example.com/crm/lead/details/42/">', text)
-        self.assertIn('Перенесён в «Мусор»',text)
+        self.assertIn('Отправлен на стадию «Мусор»',text)
+        self.assertNotIn('Новый лид',text)
         self.assertEqual(store.submission(row['id'])['state'],'junk')
 
     async def test_sources_and_retry_toggle_persist(self):
@@ -163,6 +165,13 @@ class ManualTests(unittest.IsolatedAsyncioTestCase):
         await manual.recover()
         self.assertEqual(len(manual.deliveries(row)), 2)
         self.assertEqual([call.kwargs['chat_id'] for call in manual.send_telegram_message.call_args_list], ['123', '123'])
+
+    async def test_unconfirmed_junk_does_not_mark_card_as_successful(self):
+        row = await self.submitted()
+        self.client.move_to_junk.side_effect = BitrixApiError('Битрикс не подтвердил перенос')
+        await manual.handle(self.callback('confirm',row))
+        self.assertEqual(store.submission(row['id'])['state'], 'submitted')
+        self.assertNotIn('Отправлен на стадию',manual.card(store.submission(row['id']))[0])
 
 
 if __name__ == '__main__':

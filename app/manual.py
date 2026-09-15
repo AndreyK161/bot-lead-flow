@@ -96,7 +96,7 @@ def card(row):
     elif state == 'deleted':
         text += '\n🗑 Лид удалён из Битрикса'
     elif state == 'junk':
-        text += '\n🗑 Перенесён в «Мусор»'
+        text += '\n🗑 Отправлен на стадию «Мусор»'
         portal = urlparse(get_settings().bitrix_webhook_url).netloc
         text += f'\n🔗 <a href="https://{escape(portal)}/crm/lead/details/{row["lead_id"]}/">Открыть лид в CRM</a>'
     else:
@@ -121,8 +121,7 @@ async def sync(row):
         lead = await client.get_lead(row['lead_id'])
         assigned_name = await client.get_user_name(str(lead.get('ASSIGNED_BY_ID') or ''))
         text = build_lead_notification(lead, portal_domain=urlparse(get_settings().bitrix_webhook_url).netloc,
-                                       source_name=row['source_name'], assigned_name=assigned_name)
-        text += '\n\n🗑 Перенесён в «Мусор»'
+                                       source_name=row['source_name'], assigned_name=assigned_name, is_junk=True)
         for delivery in deliveries(row):
             await edit_message_text(delivery['chat_id'], delivery['message_id'], text, reply_markup=build_manage_keyboard(row['lead_id']))
     store.save(row['id'], dirty=0)
@@ -250,7 +249,12 @@ async def handle(update):
                 await edit(chat_id, row['message_id'], text + '\n\nПеренести этот лид на стадию «Мусор»?', {'inline_keyboard': [[button('Да, в мусор', f'confirm:{row["id"]}')], [button('Оставить лид', f'keep:{row["id"]}')]]})
                 return
             elif action == 'confirm' and row['state'] == 'submitted':
-                await BitrixClient().update_lead(row['lead_id'], {'STATUS_ID': settings.junk_status_id})
+                try:
+                    await BitrixClient().move_to_junk(row['lead_id'])
+                except BitrixApiError as exc:
+                    await send(chat_id, f'Не удалось перенести лид: {escape(str(exc))}')
+                    await sync(row)
+                    return
                 store.save(row['id'], state='junk', dirty=1)
             await sync(store.submission(row['id']))
             return

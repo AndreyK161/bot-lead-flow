@@ -32,11 +32,12 @@ def build_lead_notification(
     portal_domain: str | None = None,
     source_name: str | None = None,
     assigned_name: str | None = None,
+    is_junk: bool = False,
 ) -> str:
     """Собирает HTML-сообщение для sendMessage(parse_mode=HTML)."""
 
     lead_id = lead.get("ID", "")
-    lines: list[str] = ["🆕 <b>Новый лид</b>"]
+    lines: list[str] = ["🗑 <b>Отправлен на стадию «Мусор»</b>" if is_junk else "🆕 <b>Новый лид</b>"]
 
     full_name = _build_full_name(lead)
     if full_name:
