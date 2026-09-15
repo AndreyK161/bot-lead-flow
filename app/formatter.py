@@ -72,7 +72,7 @@ def build_lead_notification(
         lines.append(f"🌐 Источник: {escape(str(source_label))}")
 
     source_description = lead.get("SOURCE_DESCRIPTION")
-    if source_description:
+    if source_description and not str(source_description).startswith('manual-bot:'):
         lines.append(f"📝 {escape(source_description)}")
 
     utm_fields = {

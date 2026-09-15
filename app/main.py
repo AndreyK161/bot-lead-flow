@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import logging
+import asyncio
+from contextlib import asynccontextmanager, suppress
+from html import escape
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request, status
 
 from app.bitrix_client import BitrixApiError, BitrixClient
 from app.config import get_settings
+from app import manual, store
 from app.formatter import (
     build_action_keyboard,
     build_assign_keyboard,
@@ -24,8 +28,34 @@ from app.telegram_client import (
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("bot-lead-flow")
+logging.getLogger("httpx").setLevel(logging.WARNING)
+logging.getLogger("httpcore").setLevel(logging.WARNING)
 
-app = FastAPI(title="bot-lead-flow")
+
+@asynccontextmanager
+async def lifespan(app):
+    task = asyncio.create_task(manual.recovery_loop()) if get_settings().manual_bot_token else None
+    yield
+    if task:
+        task.cancel()
+        with suppress(asyncio.CancelledError):
+            await task
+
+
+app = FastAPI(title="bot-lead-flow", lifespan=lifespan)
+
+
+@app.post("/telegram/webhook/manual")
+async def manual_webhook(request: Request) -> dict[str, str]:
+    settings = get_settings()
+    if not settings.manual_bot_token or not settings.manual_webhook_secret or request.headers.get("X-Telegram-Bot-Api-Secret-Token") != settings.manual_webhook_secret:
+        raise HTTPException(status_code=403, detail="Invalid webhook secret")
+    try:
+        await manual.handle(await request.json())
+    except Exception:
+        logger.error("Manual webhook processing failed; Telegram will retry")
+        raise HTTPException(status_code=502, detail="Manual bot API error")
+    return {"status": "ok"}
 
 
 def _portal_domain(webhook_url: str) -> str | None:
@@ -58,6 +88,11 @@ async def bitrix_webhook(request: Request) -> dict[str, str]:
 
     try:
         lead = await client.get_lead(lead_id)
+
+        # The manual bot publishes after storing the CRM ID. Suppress the add
+        # event (which can arrive before crm.lead.add returns) to avoid duplicates.
+        if str(lead.get("SOURCE_DESCRIPTION", "")).startswith(manual.MARKER):
+            return {"status": "manual"}
 
         source_name = None
         if lead.get("SOURCE_ID"):
@@ -141,17 +176,32 @@ async def telegram_webhook(request: Request) -> dict[str, str]:
         elif action == "au":
             lead_id, user_id = parts[1], parts[2]
             client = BitrixClient()
-            await client.update_lead(lead_id, {"ASSIGNED_BY_ID": user_id})
-            assigned_name = await client.get_user_name(user_id)
-            new_text = f"{original_text}\n\n✅ Назначен: {assigned_name or user_id}"
-            await edit_message_text(chat_id, message_id, new_text, reply_markup=build_manage_keyboard(lead_id))
+            async with manual.lock:
+                row = store.by_lead(lead_id) if settings.manual_bot_token else None
+                if row and row['state'] == 'deleted':
+                    await answer_callback_query(callback_id, text="Лид уже удалён", show_alert=True)
+                    return {"status": "ignored"}
+                users = await client.get_department_users(settings.sales_department_id)
+                if user_id not in {str(user['ID']) for user in users}:
+                    await answer_callback_query(callback_id, text="Сотрудник больше не входит в отдел", show_alert=True)
+                    return {"status": "ignored"}
+                await client.update_lead(lead_id, {"ASSIGNED_BY_ID": user_id})
+                assigned_name = await client.get_user_name(user_id)
+                if row:
+                    store.save(row['id'], manager=assigned_name or user_id, dirty=1)
+                lead = await client.get_lead(lead_id)
+                source_name = await client.get_source_name(lead.get('SOURCE_ID', ''))
+                new_text = build_lead_notification(lead, portal_domain=_portal_domain(settings.bitrix_webhook_url), source_name=source_name, assigned_name=assigned_name or user_id)
+                await edit_message_text(chat_id, message_id, new_text, reply_markup=build_manage_keyboard(lead_id))
+                if row:
+                    await manual.sync(store.submission(row['id']))
             await answer_callback_query(callback_id, text="Ответственный назначен")
 
         elif action == "j":
             lead_id = parts[1]
             client = BitrixClient()
             await client.update_lead(lead_id, {"STATUS_ID": settings.junk_status_id})
-            new_text = f"{original_text}\n\n🗑 Перенесён в «Мусор»"
+            new_text = f"{escape(original_text)}\n\n🗑 Перенесён в «Мусор»"
             await edit_message_text(chat_id, message_id, new_text, reply_markup=build_manage_keyboard(lead_id))
             await answer_callback_query(callback_id, text="Лид перенесён в мусор")
 

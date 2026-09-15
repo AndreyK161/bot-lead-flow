@@ -83,6 +83,15 @@ class BitrixClient:
     async def update_lead(self, lead_id: str | int, fields: dict[str, Any]) -> None:
         await self._call("crm.lead.update", {"id": lead_id, "fields": fields})
 
+    async def add_lead(self, fields: dict[str, Any]) -> str:
+        return str(await self._call("crm.lead.add", {"fields": fields}))
+
+    async def delete_lead(self, lead_id: str) -> None:
+        await self._call("crm.lead.delete", {"id": lead_id})
+
+    async def get_sources(self) -> list[dict[str, Any]]:
+        return await self._call("crm.status.list", {"filter": {"ENTITY_ID": "SOURCE"}, "order": {"SORT": "ASC"}})
+
 
 class BitrixApiError(RuntimeError):
     """Битрикс вернул ошибку в теле ответа (200 OK, но {"error": ...})."""

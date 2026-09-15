@@ -34,6 +34,10 @@ class Settings(BaseSettings):
     # STATUS_ID лидовой стадии "Мусор"
     junk_status_id: str
 
+    manual_bot_token: str = ""
+    manual_webhook_secret: str = ""
+    database_path: str = "data/leads.sqlite3"
+
 
 @lru_cache
 def get_settings() -> Settings:
