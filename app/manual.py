@@ -215,7 +215,7 @@ async def handle(update):
                     return
                 source = sources[0]
                 store.save(row['id'], state='creating', source_id=source['id'], source_name=source['name'], dirty=1)
-                fields = {'TITLE': f'Ручная заявка: {row["contact"]}', 'SOURCE_ID': source['id'],
+                fields = {'TITLE': f'Лид {source["name"]}', 'SOURCE_ID': source['id'],
                           'SOURCE_DESCRIPTION': MARKER + row['id'], 'COMMENTS': f'Контакт: {row["contact"]}\nДобавлено вручную (Telegram ID {user["id"]})'}
                 if re.fullmatch(r'\+?[\d\s()\-]{7,25}', row['contact']):
                     fields['PHONE'] = [{'VALUE': re.sub(r'[^\d+]', '', row['contact']), 'VALUE_TYPE': 'WORK'}]

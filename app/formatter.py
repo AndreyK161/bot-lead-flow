@@ -26,17 +26,6 @@ def _build_full_name(lead: dict[str, Any]) -> str | None:
     return name or None
 
 
-def _format_amount(opportunity: Any, currency: str | None) -> str | None:
-    if opportunity in (None, "", "0", 0):
-        return None
-    try:
-        amount = float(opportunity)
-    except (TypeError, ValueError):
-        return None
-    formatted = f"{amount:,.0f}".replace(",", " ")
-    return f"{formatted} {currency}".strip() if currency else formatted
-
-
 def build_lead_notification(
     lead: dict[str, Any],
     *,
@@ -62,10 +51,6 @@ def build_lead_notification(
     if emails:
         emails_str = ", ".join(f"<code>{escape(e)}</code>" for e in emails)
         lines.append(f"✉️ {emails_str}")
-
-    amount = _format_amount(lead.get("OPPORTUNITY"), lead.get("CURRENCY_ID"))
-    if amount:
-        lines.append(f"💰 {escape(amount)}")
 
     source_label = source_name or lead.get("SOURCE_ID")
     if source_label:
