@@ -27,9 +27,16 @@ class TelegramApiError(RuntimeError):
 
 
 async def send_telegram_message(text: str, *, reply_markup: dict[str, Any] | None = None, chat_id: str | int | None = None) -> dict[str, Any]:
+async def send_telegram_message(
+    text: str,
+    *,
+    chat_id: int | str | None = None,
+    reply_markup: dict[str, Any] | None = None,
+) -> dict[str, Any]:
     settings = get_settings()
     payload: dict[str, Any] = {
         "chat_id": chat_id or settings.telegram_chat_id,
+        "chat_id": chat_id if chat_id is not None else settings.telegram_chat_id,
         "text": text,
         "parse_mode": "HTML",
         "disable_web_page_preview": True,

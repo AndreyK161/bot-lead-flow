@@ -86,28 +86,28 @@ def build_lead_notification(
     return "\n".join(lines)
 
 
-def build_manage_keyboard(lead_id: str | int) -> dict[str, Any]:
+def build_manage_keyboard(lead_id: str | int, group_message_id: int) -> dict[str, Any]:
     return {
         "inline_keyboard": [
-            [{"text": "🛠 Управлять", "callback_data": f"m:{lead_id}"}],
+            [{"text": "🛠 Управлять", "callback_data": f"m:{lead_id}:{group_message_id}"}],
         ]
     }
 
 
-def build_action_keyboard(lead_id: str | int) -> dict[str, Any]:
+def build_action_keyboard(lead_id: str | int, group_message_id: int) -> dict[str, Any]:
     return {
         "inline_keyboard": [
-            [{"text": "👤 Назначить ответственного", "callback_data": f"a:{lead_id}"}],
-            [{"text": "🗑 В мусор", "callback_data": f"j:{lead_id}"}],
-            [{"text": "⬅️ Назад", "callback_data": f"b:{lead_id}"}],
+            [{"text": "👤 Назначить ответственного", "callback_data": f"a:{lead_id}:{group_message_id}"}],
+            [{"text": "🗑 В мусор", "callback_data": f"j:{lead_id}:{group_message_id}"}],
+            [{"text": "⬅️ Назад", "callback_data": f"b:{lead_id}:{group_message_id}"}],
         ]
     }
 
 
-def build_assign_keyboard(lead_id: str | int, users: list[dict[str, Any]]) -> dict[str, Any]:
+def build_assign_keyboard(lead_id: str | int, group_message_id: int, users: list[dict[str, Any]]) -> dict[str, Any]:
     rows = []
     for user in users:
         name = " ".join(p for p in (user.get("NAME"), user.get("LAST_NAME")) if p) or user.get("EMAIL") or user["ID"]
-        rows.append([{"text": name, "callback_data": f"au:{lead_id}:{user['ID']}"}])
-    rows.append([{"text": "⬅️ Назад", "callback_data": f"b:{lead_id}"}])
+        rows.append([{"text": name, "callback_data": f"au:{lead_id}:{user['ID']}:{group_message_id}"}])
+    rows.append([{"text": "⬅️ Назад", "callback_data": f"b:{lead_id}:{group_message_id}"}])
     return {"inline_keyboard": rows}

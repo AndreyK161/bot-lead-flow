@@ -111,11 +111,23 @@ async def bitrix_webhook(request: Request) -> dict[str, str]:
         assigned_name=assigned_name,
     )
 
+    # В общий чат — простое уведомление без кнопок, видят все участники.
     try:
-        await send_telegram_message(message, reply_markup=build_manage_keyboard(lead_id))
+        group_message = await send_telegram_message(message)
     except Exception:
-        logger.exception("Failed to send Telegram message for lead_id=%s", lead_id)
+        logger.exception("Failed to send Telegram group message for lead_id=%s", lead_id)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Telegram API error")
+
+    group_message_id = group_message["message_id"]
+
+    # Каждому админу в личку — то же уведомление, но с кнопками управления.
+    keyboard = build_manage_keyboard(lead_id, group_message_id)
+    for admin_id in settings.admin_telegram_user_id_set:
+        try:
+            await send_telegram_message(message, chat_id=admin_id, reply_markup=keyboard)
+        except Exception:
+            # Например, админ ещё ни разу не писал боту в личку — бот не может начать диалог первым.
+            logger.exception("Failed to send Telegram DM to admin_id=%s for lead_id=%s", admin_id, lead_id)
 
     return {"status": "ok"}
 
@@ -142,13 +154,13 @@ async def telegram_webhook(request: Request) -> dict[str, str]:
 
     data = callback_query.get("data", "")
     message = callback_query["message"]
-    chat_id = message["chat"]["id"]
-    message_id = message["message_id"]
+    dm_chat_id = message["chat"]["id"]
+    dm_message_id = message["message_id"]
     original_text = message.get("text", "")
 
     logger.info(
-        "Callback received: data=%s chat_id=%s message_id=%s from_user_id=%s",
-        data, chat_id, message_id, from_user_id,
+        "Callback received: data=%s dm_chat_id=%s dm_message_id=%s from_user_id=%s",
+        data, dm_chat_id, dm_message_id, from_user_id,
     )
 
     try:
@@ -156,24 +168,24 @@ async def telegram_webhook(request: Request) -> dict[str, str]:
         action = parts[0]
 
         if action == "m":
-            lead_id = parts[1]
-            await edit_message_reply_markup(chat_id, message_id, build_action_keyboard(lead_id))
+            lead_id, group_message_id = parts[1], int(parts[2])
+            await edit_message_reply_markup(dm_chat_id, dm_message_id, build_action_keyboard(lead_id, group_message_id))
             await answer_callback_query(callback_id)
 
         elif action == "b":
-            lead_id = parts[1]
-            await edit_message_reply_markup(chat_id, message_id, build_manage_keyboard(lead_id))
+            lead_id, group_message_id = parts[1], int(parts[2])
+            await edit_message_reply_markup(dm_chat_id, dm_message_id, build_manage_keyboard(lead_id, group_message_id))
             await answer_callback_query(callback_id)
 
         elif action == "a":
-            lead_id = parts[1]
+            lead_id, group_message_id = parts[1], int(parts[2])
             client = BitrixClient()
             users = await client.get_department_users(settings.sales_department_id)
-            await edit_message_reply_markup(chat_id, message_id, build_assign_keyboard(lead_id, users))
+            await edit_message_reply_markup(dm_chat_id, dm_message_id, build_assign_keyboard(lead_id, group_message_id, users))
             await answer_callback_query(callback_id)
 
         elif action == "au":
-            lead_id, user_id = parts[1], parts[2]
+            lead_id, user_id, group_message_id = parts[1], parts[2], int(parts[3])
             client = BitrixClient()
             async with manual.lock:
                 row = store.by_lead(lead_id) if settings.manual_bot_token else None
@@ -194,11 +206,26 @@ async def telegram_webhook(request: Request) -> dict[str, str]:
                 await edit_message_text(chat_id, message_id, new_text, reply_markup=build_manage_keyboard(lead_id))
                 if row:
                     await manual.sync(store.submission(row['id']))
+            await client.update_lead(lead_id, {"ASSIGNED_BY_ID": user_id})
+            assigned_name = await client.get_user_name(user_id)
+            suffix = f"\n\n✅ Назначен: {assigned_name or user_id}"
+            new_text = f"{original_text}{suffix}"
+            await edit_message_text(
+                dm_chat_id, dm_message_id, new_text,
+                reply_markup=build_manage_keyboard(lead_id, group_message_id),
+            )
+            await edit_message_text(settings.telegram_chat_id, group_message_id, f"{original_text}{suffix}")
             await answer_callback_query(callback_id, text="Ответственный назначен")
 
         elif action == "j":
-            lead_id = parts[1]
+            lead_id, group_message_id = parts[1], int(parts[2])
             client = BitrixClient()
+            await client.update_lead(lead_id, {"STATUS_ID": settings.junk_status_id})
+            suffix = "\n\n🗑 Перенесён в «Мусор»"
+            new_text = f"{original_text}{suffix}"
+            await edit_message_text(dm_chat_id, dm_message_id, new_text, reply_markup={"inline_keyboard": []})
+            await edit_message_text(settings.telegram_chat_id, group_message_id, new_text)
+            await answer_callback_query(callback_id, text="Лид перенесён в мусор")
             async with manual.lock:
                 lead = await client.move_to_junk(lead_id)
                 row = store.by_lead(lead_id) if settings.manual_bot_token else None
