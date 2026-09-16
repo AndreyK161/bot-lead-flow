@@ -12,9 +12,9 @@ from app.bitrix_client import BitrixApiError
 class ManualTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.tmp = tempfile.TemporaryDirectory()
-        self.settings = SimpleNamespace(database_path=self.tmp.name+'/db.sqlite', admin_telegram_user_id_set={123},
+        self.settings = SimpleNamespace(database_path=self.tmp.name+'/db.sqlite', director_user_id_set={123}, admin_user_id_set=set(),
             manual_bot_token='test', manual_webhook_secret='secret', telegram_chat_id='-100',
-            bitrix_webhook_url='https://example.com/rest/1/test/', sales_department_id='5', junk_status_id='JUNK')
+            bitrix_webhook_url='https://example.com/rest/1/test/', sales_department_id='5')
         self.patches = [patch('app.store.get_settings', return_value=self.settings),
                         patch('app.manual.get_settings', return_value=self.settings),
                         patch('app.main.get_settings', return_value=self.settings)]

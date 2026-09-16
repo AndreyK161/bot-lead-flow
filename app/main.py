@@ -234,19 +234,48 @@ async def _handle_callback(callback_query: dict, settings) -> None:
         elif action == "au":
             lead_id, user_id = parts[1], parts[2]
             client = BitrixClient()
-            await client.update_lead(lead_id, {"ASSIGNED_BY_ID": user_id})
-            assigned_name = await client.get_user_name(user_id)
-            new_text = f"{original_text}\n\n✅ Назначен: {assigned_name or user_id}"
-            await edit_message_text(chat_id, message_id, new_text, reply_markup=build_manage_keyboard(lead_id))
+            async with manual.lock:
+                row = store.by_lead(lead_id) if settings.manual_bot_token else None
+                if row and row["state"] == "deleted":
+                    await answer_callback_query(callback_id, text="Лид уже удалён", show_alert=True)
+                    return
+                users = await client.get_department_users(settings.sales_department_id)
+                if user_id not in {str(user["ID"]) for user in users}:
+                    await answer_callback_query(callback_id, text="Сотрудник больше не входит в отдел", show_alert=True)
+                    return
+                await client.update_lead(lead_id, {"ASSIGNED_BY_ID": user_id})
+                assigned_name = await client.get_user_name(user_id)
+                if row:
+                    store.save(row["id"], manager=assigned_name or user_id, dirty=1)
+                lead = await client.get_lead(lead_id)
+                source_name = await client.get_source_name(lead.get("SOURCE_ID", ""))
+                new_text = build_lead_notification(
+                    lead, portal_domain=_portal_domain(settings.bitrix_webhook_url),
+                    source_name=source_name, assigned_name=assigned_name or user_id,
+                )
+                await edit_message_text(chat_id, message_id, new_text, reply_markup=build_manage_keyboard(lead_id))
+                if row:
+                    await manual.sync(store.submission(row["id"]))
             await answer_callback_query(callback_id, text="Ответственный назначен")
             await _notify_assigned_manager(client, settings, lead_id, user_id, assigned_name)
 
         elif action == "j":
             lead_id = parts[1]
             client = BitrixClient()
-            await client.move_to_junk(lead_id)
-            new_text = f"{original_text}\n\n🗑 Перенесён в «Мусор»"
-            await edit_message_text(chat_id, message_id, new_text, reply_markup={"inline_keyboard": []})
+            async with manual.lock:
+                lead = await client.move_to_junk(lead_id)
+                row = store.by_lead(lead_id) if settings.manual_bot_token else None
+                if row:
+                    store.save(row["id"], state="junk", dirty=1)
+                source_name = await client.get_source_name(lead.get("SOURCE_ID", ""))
+                assigned_name = await client.get_user_name(str(lead.get("ASSIGNED_BY_ID") or ""))
+                new_text = build_lead_notification(
+                    lead, portal_domain=_portal_domain(settings.bitrix_webhook_url),
+                    source_name=source_name, assigned_name=assigned_name, is_junk=True,
+                )
+                await edit_message_text(chat_id, message_id, new_text, reply_markup={"inline_keyboard": []})
+                if row:
+                    await manual.sync(store.submission(row["id"]))
             await answer_callback_query(callback_id, text="Лид перенесён в мусор")
 
         elif action == "link_pick":

@@ -88,6 +88,16 @@ requirements.txt
 .env.example
 ```
 
+## Тесты
+
+Юнит- и интеграционные тесты (без реальных запросов к Bitrix/Telegram — все внешние вызовы замоканы):
+
+```bash
+python3 -m unittest discover -s tests -v
+```
+
+`tests/test_formatter.py` — сборка сообщений и клавиатур; `tests/test_store.py` — SQLite-хранилище (привязки продажник↔Telegram); `tests/test_webhook.py` — эндпоинты `/bitrix/webhook` и `/telegram/webhook` (проверка токенов, разделение ролей руководитель/админ, назначение лида, `/link`); `tests/test_bitrix_junk.py`, `tests/test_manual.py` — клиент Bitrix и «ручной» бот ввода заявок.
+
 ## Обработка edge-кейсов
 
 - Пустые/отсутствующие `PHONE`/`EMAIL` (multifield) — строки просто
