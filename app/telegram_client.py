@@ -16,8 +16,8 @@ async def _call(method: str, payload: dict[str, Any], *, manual: bool = False) -
     async with httpx.AsyncClient(timeout=15.0) as client:
         response = await client.post(url, json=payload)
         if response.status_code >= 400:
-            if method.startswith('editMessage') and 'message is not modified' in response.text:
-                return {'ok': True, 'result': True}
+            if method.startswith("editMessage") and "message is not modified" in response.text:
+                return {"ok": True, "result": True}
             raise TelegramApiError(f"{method}: {response.status_code} {response.text}")
     return response.json()
 
@@ -26,7 +26,6 @@ class TelegramApiError(RuntimeError):
     """Telegram Bot API вернул ошибку — текст ответа содержит description с причиной."""
 
 
-async def send_telegram_message(text: str, *, reply_markup: dict[str, Any] | None = None, chat_id: str | int | None = None) -> dict[str, Any]:
 async def send_telegram_message(
     text: str,
     *,
@@ -35,7 +34,6 @@ async def send_telegram_message(
 ) -> dict[str, Any]:
     settings = get_settings()
     payload: dict[str, Any] = {
-        "chat_id": chat_id or settings.telegram_chat_id,
         "chat_id": chat_id if chat_id is not None else settings.telegram_chat_id,
         "text": text,
         "parse_mode": "HTML",
@@ -43,14 +41,8 @@ async def send_telegram_message(
     }
     if reply_markup is not None:
         payload["reply_markup"] = reply_markup
-    destinations = [chat_id] if chat_id is not None else settings.notification_chat_ids
-    first = None
-    for destination in destinations:
-        payload['chat_id'] = destination
-        result = await _call("sendMessage", payload)
-        if first is None:
-            first = result['result']
-    return first
+    result = await _call("sendMessage", payload)
+    return result["result"]
 
 
 async def edit_message_text(

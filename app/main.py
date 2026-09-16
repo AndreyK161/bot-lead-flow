@@ -2,20 +2,22 @@
 
 from __future__ import annotations
 
-import logging
 import asyncio
+import logging
 from contextlib import asynccontextmanager, suppress
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request, status
 
+from app import manual, store
 from app.bitrix_client import BitrixApiError, BitrixClient
 from app.config import get_settings
-from app import manual, store
 from app.formatter import (
     build_action_keyboard,
     build_assign_keyboard,
     build_lead_notification,
+    build_link_pick_keyboard,
+    build_link_target_keyboard,
     build_manage_keyboard,
 )
 from app.telegram_client import (
@@ -47,12 +49,16 @@ app = FastAPI(title="bot-lead-flow", lifespan=lifespan)
 @app.post("/telegram/webhook/manual")
 async def manual_webhook(request: Request) -> dict[str, str]:
     settings = get_settings()
-    if not settings.manual_bot_token or not settings.manual_webhook_secret or request.headers.get("X-Telegram-Bot-Api-Secret-Token") != settings.manual_webhook_secret:
+    if (
+        not settings.manual_bot_token
+        or not settings.manual_webhook_secret
+        or request.headers.get("X-Telegram-Bot-Api-Secret-Token") != settings.manual_webhook_secret
+    ):
         raise HTTPException(status_code=403, detail="Invalid webhook secret")
     try:
         await manual.handle(await request.json())
     except Exception:
-        logger.error("Manual webhook processing failed; Telegram will retry")
+        logger.exception("Manual webhook processing failed; Telegram will retry")
         raise HTTPException(status_code=502, detail="Manual bot API error")
     return {"status": "ok"}
 
@@ -88,8 +94,7 @@ async def bitrix_webhook(request: Request) -> dict[str, str]:
     try:
         lead = await client.get_lead(lead_id)
 
-        # The manual bot publishes after storing the CRM ID. Suppress the add
-        # event (which can arrive before crm.lead.add returns) to avoid duplicates.
+        # "Ручной" бот публикует уведомление сам после создания лида — здесь его дублировать не надо.
         if str(lead.get("SOURCE_DESCRIPTION", "")).startswith(manual.MARKER):
             return {"status": "manual"}
 
@@ -111,56 +116,98 @@ async def bitrix_webhook(request: Request) -> dict[str, str]:
         assigned_name=assigned_name,
     )
 
-    # В общий чат — простое уведомление без кнопок, видят все участники.
-    try:
-        group_message = await send_telegram_message(message)
-    except Exception:
-        logger.exception("Failed to send Telegram group message for lead_id=%s", lead_id)
-        raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Telegram API error")
-
-    group_message_id = group_message["message_id"]
-
-    # Каждому админу в личку — то же уведомление, но с кнопками управления.
-    keyboard = build_manage_keyboard(lead_id, group_message_id)
-    for admin_id in settings.admin_telegram_user_id_set:
+    # Каждому руководителю в личку — уведомление с кнопками управления. Общего чата нет.
+    keyboard = build_manage_keyboard(lead_id)
+    for admin_id in settings.director_user_id_set:
         try:
             await send_telegram_message(message, chat_id=admin_id, reply_markup=keyboard)
         except Exception:
-            # Например, админ ещё ни разу не писал боту в личку — бот не может начать диалог первым.
+            # Например, руководитель ещё ни разу не писал боту в личку — бот не может начать диалог первым.
             logger.exception("Failed to send Telegram DM to admin_id=%s for lead_id=%s", admin_id, lead_id)
 
     return {"status": "ok"}
 
 
-@app.post("/telegram/webhook")
-async def telegram_webhook(request: Request) -> dict[str, str]:
-    settings = get_settings()
+async def _notify_assigned_manager(client: BitrixClient, settings, lead_id: str, bitrix_user_id: str, assigned_name: str | None) -> None:
+    """Если продажник привязан к Telegram — пишет ему в личку, что на него назначили лид."""
+    manager_chat_id = store.manager_telegram_id(bitrix_user_id)
+    if not manager_chat_id:
+        return
+    try:
+        lead = await client.get_lead(lead_id)
+        source_name = await client.get_source_name(lead.get("SOURCE_ID", ""))
+        text = "📌 <b>На вас назначен лид</b>\n\n" + build_lead_notification(
+            lead,
+            portal_domain=_portal_domain(settings.bitrix_webhook_url),
+            source_name=source_name,
+            assigned_name=assigned_name,
+        )
+        await send_telegram_message(text, chat_id=manager_chat_id)
+    except Exception:
+        logger.exception("Failed to notify manager telegram_id=%s about lead_id=%s", manager_chat_id, lead_id)
 
-    secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
-    if secret != settings.telegram_webhook_secret:
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid webhook secret")
 
-    update = await request.json()
-    callback_query = update.get("callback_query")
-    if not callback_query:
-        return {"status": "ignored"}
+async def _handle_message(message: dict, settings) -> None:
+    if message.get("chat", {}).get("type") != "private":
+        return
+    user = message.get("from") or {}
+    user_id = user.get("id")
+    text = (message.get("text") or "").strip()
 
+    if text == "/start":
+        store.record_start(user_id, user.get("username"), user.get("first_name"))
+        await send_telegram_message("Готово — вы будете получать уведомления от бота здесь.", chat_id=user_id)
+        return
+
+    if user_id not in settings.admin_user_id_set:
+        return
+
+    if text == "/link":
+        client = BitrixClient()
+        users = await client.get_department_users(settings.sales_department_id)
+        if not users:
+            await send_telegram_message("В отделе продаж нет сотрудников.", chat_id=user_id)
+            return
+        await send_telegram_message(
+            "Кого из продажников привязать к Telegram?",
+            chat_id=user_id,
+            reply_markup=build_link_pick_keyboard(users),
+        )
+        return
+
+    if text == "/links":
+        links = store.list_links()
+        if not links:
+            await send_telegram_message("Пока никто не привязан. Используйте /link.", chat_id=user_id)
+            return
+        lines = [f"{link['bitrix_name']} → <code>{link['telegram_id']}</code>" for link in links]
+        await send_telegram_message("🔗 <b>Привязки</b>\n" + "\n".join(lines), chat_id=user_id)
+        return
+
+
+LINK_ACTIONS = {"link_pick", "link_to", "link_cancel"}
+
+
+async def _handle_callback(callback_query: dict, settings) -> None:
     callback_id = callback_query["id"]
     from_user_id = callback_query["from"]["id"]
 
-    if from_user_id not in settings.admin_telegram_user_id_set:
-        await answer_callback_query(callback_id, text="Нет доступа", show_alert=True)
-        return {"status": "forbidden"}
-
     data = callback_query.get("data", "")
+    action_prefix = data.split(":", 1)[0]
+    allowed_set = settings.admin_user_id_set if action_prefix in LINK_ACTIONS else settings.director_user_id_set
+
+    if from_user_id not in allowed_set:
+        await answer_callback_query(callback_id, text="Нет доступа", show_alert=True)
+        return
+
     message = callback_query["message"]
-    dm_chat_id = message["chat"]["id"]
-    dm_message_id = message["message_id"]
+    chat_id = message["chat"]["id"]
+    message_id = message["message_id"]
     original_text = message.get("text", "")
 
     logger.info(
-        "Callback received: data=%s dm_chat_id=%s dm_message_id=%s from_user_id=%s",
-        data, dm_chat_id, dm_message_id, from_user_id,
+        "Callback received: data=%s chat_id=%s message_id=%s from_user_id=%s",
+        data, chat_id, message_id, from_user_id,
     )
 
     try:
@@ -168,76 +215,67 @@ async def telegram_webhook(request: Request) -> dict[str, str]:
         action = parts[0]
 
         if action == "m":
-            lead_id, group_message_id = parts[1], int(parts[2])
-            await edit_message_reply_markup(dm_chat_id, dm_message_id, build_action_keyboard(lead_id, group_message_id))
+            lead_id = parts[1]
+            await edit_message_reply_markup(chat_id, message_id, build_action_keyboard(lead_id))
             await answer_callback_query(callback_id)
 
         elif action == "b":
-            lead_id, group_message_id = parts[1], int(parts[2])
-            await edit_message_reply_markup(dm_chat_id, dm_message_id, build_manage_keyboard(lead_id, group_message_id))
+            lead_id = parts[1]
+            await edit_message_reply_markup(chat_id, message_id, build_manage_keyboard(lead_id))
             await answer_callback_query(callback_id)
 
         elif action == "a":
-            lead_id, group_message_id = parts[1], int(parts[2])
+            lead_id = parts[1]
             client = BitrixClient()
             users = await client.get_department_users(settings.sales_department_id)
-            await edit_message_reply_markup(dm_chat_id, dm_message_id, build_assign_keyboard(lead_id, group_message_id, users))
+            await edit_message_reply_markup(chat_id, message_id, build_assign_keyboard(lead_id, users))
             await answer_callback_query(callback_id)
 
         elif action == "au":
-            lead_id, user_id, group_message_id = parts[1], parts[2], int(parts[3])
+            lead_id, user_id = parts[1], parts[2]
             client = BitrixClient()
-            async with manual.lock:
-                row = store.by_lead(lead_id) if settings.manual_bot_token else None
-                if row and row['state'] == 'deleted':
-                    await answer_callback_query(callback_id, text="Лид уже удалён", show_alert=True)
-                    return {"status": "ignored"}
-                users = await client.get_department_users(settings.sales_department_id)
-                if user_id not in {str(user['ID']) for user in users}:
-                    await answer_callback_query(callback_id, text="Сотрудник больше не входит в отдел", show_alert=True)
-                    return {"status": "ignored"}
-                await client.update_lead(lead_id, {"ASSIGNED_BY_ID": user_id})
-                assigned_name = await client.get_user_name(user_id)
-                if row:
-                    store.save(row['id'], manager=assigned_name or user_id, dirty=1)
-                lead = await client.get_lead(lead_id)
-                source_name = await client.get_source_name(lead.get('SOURCE_ID', ''))
-                new_text = build_lead_notification(lead, portal_domain=_portal_domain(settings.bitrix_webhook_url), source_name=source_name, assigned_name=assigned_name or user_id)
-                await edit_message_text(chat_id, message_id, new_text, reply_markup=build_manage_keyboard(lead_id))
-                if row:
-                    await manual.sync(store.submission(row['id']))
             await client.update_lead(lead_id, {"ASSIGNED_BY_ID": user_id})
             assigned_name = await client.get_user_name(user_id)
-            suffix = f"\n\n✅ Назначен: {assigned_name or user_id}"
-            new_text = f"{original_text}{suffix}"
-            await edit_message_text(
-                dm_chat_id, dm_message_id, new_text,
-                reply_markup=build_manage_keyboard(lead_id, group_message_id),
-            )
-            await edit_message_text(settings.telegram_chat_id, group_message_id, f"{original_text}{suffix}")
+            new_text = f"{original_text}\n\n✅ Назначен: {assigned_name or user_id}"
+            await edit_message_text(chat_id, message_id, new_text, reply_markup=build_manage_keyboard(lead_id))
             await answer_callback_query(callback_id, text="Ответственный назначен")
+            await _notify_assigned_manager(client, settings, lead_id, user_id, assigned_name)
 
         elif action == "j":
-            lead_id, group_message_id = parts[1], int(parts[2])
+            lead_id = parts[1]
             client = BitrixClient()
-            await client.update_lead(lead_id, {"STATUS_ID": settings.junk_status_id})
-            suffix = "\n\n🗑 Перенесён в «Мусор»"
-            new_text = f"{original_text}{suffix}"
-            await edit_message_text(dm_chat_id, dm_message_id, new_text, reply_markup={"inline_keyboard": []})
-            await edit_message_text(settings.telegram_chat_id, group_message_id, new_text)
+            await client.move_to_junk(lead_id)
+            new_text = f"{original_text}\n\n🗑 Перенесён в «Мусор»"
+            await edit_message_text(chat_id, message_id, new_text, reply_markup={"inline_keyboard": []})
             await answer_callback_query(callback_id, text="Лид перенесён в мусор")
-            async with manual.lock:
-                lead = await client.move_to_junk(lead_id)
-                row = store.by_lead(lead_id) if settings.manual_bot_token else None
-                if row:
-                    store.save(row['id'], state='junk', dirty=1)
-                source_name = await client.get_source_name(lead.get('SOURCE_ID', ''))
-                assigned_name = await client.get_user_name(str(lead.get('ASSIGNED_BY_ID') or ''))
-                new_text = build_lead_notification(lead, portal_domain=_portal_domain(settings.bitrix_webhook_url), source_name=source_name, assigned_name=assigned_name, is_junk=True)
-                await edit_message_text(chat_id, message_id, new_text, reply_markup=build_manage_keyboard(lead_id))
-                if row:
-                    await manual.sync(store.submission(row['id']))
-            await answer_callback_query(callback_id, text="Лид отправлен на стадию «Мусор»")
+
+        elif action == "link_pick":
+            bitrix_user_id = parts[1]
+            client = BitrixClient()
+            bitrix_name = await client.get_user_name(bitrix_user_id) or bitrix_user_id
+            starts = store.recent_starts()
+            if not starts:
+                await edit_message_text(chat_id, message_id, "Пока никто не писал боту /start.", reply_markup={"inline_keyboard": []})
+                await answer_callback_query(callback_id)
+                return
+            await edit_message_text(
+                chat_id, message_id,
+                f"Привязать «{bitrix_name}» к какому Telegram-аккаунту?",
+                reply_markup=build_link_target_keyboard(bitrix_user_id, bitrix_name, starts),
+            )
+            await answer_callback_query(callback_id)
+
+        elif action == "link_to":
+            bitrix_user_id, telegram_id = parts[1], int(parts[2])
+            client = BitrixClient()
+            bitrix_name = await client.get_user_name(bitrix_user_id) or bitrix_user_id
+            store.link_manager(bitrix_user_id, bitrix_name, telegram_id)
+            await edit_message_text(chat_id, message_id, f"✅ Привязано: {bitrix_name} → {telegram_id}", reply_markup={"inline_keyboard": []})
+            await answer_callback_query(callback_id, text="Привязка сохранена")
+
+        elif action == "link_cancel":
+            await edit_message_text(chat_id, message_id, "Отменено.", reply_markup={"inline_keyboard": []})
+            await answer_callback_query(callback_id)
 
         else:
             await answer_callback_query(callback_id)
@@ -249,7 +287,28 @@ async def telegram_webhook(request: Request) -> dict[str, str]:
         logger.exception("Failed to handle Telegram callback data=%s", data)
         await answer_callback_query(callback_id, text="Внутренняя ошибка", show_alert=True)
 
-    return {"status": "ok"}
+
+@app.post("/telegram/webhook")
+async def telegram_webhook(request: Request) -> dict[str, str]:
+    settings = get_settings()
+
+    secret = request.headers.get("X-Telegram-Bot-Api-Secret-Token")
+    if secret != settings.telegram_webhook_secret:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid webhook secret")
+
+    update = await request.json()
+
+    message = update.get("message")
+    if message is not None:
+        await _handle_message(message, settings)
+        return {"status": "ok"}
+
+    callback_query = update.get("callback_query")
+    if callback_query is not None:
+        await _handle_callback(callback_query, settings)
+        return {"status": "ok"}
+
+    return {"status": "ignored"}
 
 
 @app.get("/health")

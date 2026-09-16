@@ -28,6 +28,14 @@ def db():
             submission_id TEXT NOT NULL, chat_id TEXT NOT NULL, message_id INTEGER NOT NULL,
             PRIMARY KEY (submission_id, chat_id)
         );
+        CREATE TABLE IF NOT EXISTS telegram_starts (
+            telegram_id INTEGER PRIMARY KEY, username TEXT, first_name TEXT,
+            started_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS manager_links (
+            bitrix_user_id TEXT PRIMARY KEY, bitrix_name TEXT, telegram_id INTEGER NOT NULL,
+            linked_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
     ''')
     try:
         with conn:
@@ -58,3 +66,32 @@ def by_lead(lead_id):
 
 def save(identifier, **fields):
     execute('UPDATE submissions SET ' + ','.join(f'{key}=?' for key in fields) + ' WHERE id=?', (*fields.values(), identifier))
+
+
+def record_start(telegram_id, username, first_name):
+    execute(
+        'INSERT INTO telegram_starts (telegram_id, username, first_name) VALUES (?,?,?) '
+        'ON CONFLICT(telegram_id) DO UPDATE SET username=excluded.username, first_name=excluded.first_name',
+        (telegram_id, username, first_name),
+    )
+
+
+def recent_starts(limit=20):
+    return rows('SELECT * FROM telegram_starts ORDER BY started_at DESC LIMIT ?', (limit,))
+
+
+def link_manager(bitrix_user_id, bitrix_name, telegram_id):
+    execute(
+        'INSERT INTO manager_links (bitrix_user_id, bitrix_name, telegram_id) VALUES (?,?,?) '
+        'ON CONFLICT(bitrix_user_id) DO UPDATE SET bitrix_name=excluded.bitrix_name, telegram_id=excluded.telegram_id',
+        (str(bitrix_user_id), bitrix_name, telegram_id),
+    )
+
+
+def manager_telegram_id(bitrix_user_id):
+    result = rows('SELECT telegram_id FROM manager_links WHERE bitrix_user_id=?', (str(bitrix_user_id),))
+    return result[0]['telegram_id'] if result else None
+
+
+def list_links():
+    return rows('SELECT * FROM manager_links ORDER BY bitrix_name')

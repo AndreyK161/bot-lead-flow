@@ -192,7 +192,7 @@ async def handle(update):
     if not message or not user:
         return
     chat_id = message['chat']['id']
-    if user['id'] not in settings.admin_telegram_user_id_set or message['chat']['type'] != 'private':
+    if user['id'] not in settings.director_user_id_set or message['chat']['type'] != 'private':
         if cb:
             await call('answerCallbackQuery', {'callback_query_id': cb['id'], 'text': 'Нет доступа', 'show_alert': True})
         else:

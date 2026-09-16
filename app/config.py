@@ -26,18 +26,22 @@ class Settings(BaseSettings):
     # (задаётся при setWebhook) — защищает /telegram/webhook от чужих запросов
     telegram_webhook_secret: str
 
-    # Telegram user_id людей, которым можно управлять лидами через кнопки (через запятую)
-    admin_telegram_user_ids: str
+    # Telegram user_id руководителей — управляют лидами через кнопки, плюс доступ к ручному боту (через запятую)
+    director_users: str
 
     @property
-    def admin_telegram_user_id_set(self) -> set[int]:
-        return {int(x.strip()) for x in self.admin_telegram_user_ids.split(",") if x.strip()}
+    def director_user_id_set(self) -> set[int]:
+        return {int(x.strip()) for x in self.director_users.split(",") if x.strip()}
+
+    # Telegram user_id админов бота — только привязка продажник↔Telegram (/link, /links), к лидам доступа нет
+    admin_users: str = ""
+
+    @property
+    def admin_user_id_set(self) -> set[int]:
+        return {int(x.strip()) for x in self.admin_users.split(",") if x.strip()}
 
     # Отдел в Bitrix, из которого предлагать список ответственных при назначении
     sales_department_id: str
-
-    # STATUS_ID лидовой стадии "Мусор"
-    junk_status_id: str
 
     manual_bot_token: str = ""
     manual_webhook_secret: str = ""
