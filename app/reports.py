@@ -41,7 +41,12 @@ async def send_daily_reports() -> None:
 
     start_iso, end_iso = _today_bounds_moscow()
     leads = await client.get_leads_created_between(start_iso, end_iso)
-    by_manager = _group_leads_by_manager(leads)
+    sales_ids = {str(user["ID"]) for user in await client.get_department_users(settings.sales_department_id)}
+    by_manager = {
+        manager_id: manager_leads
+        for manager_id, manager_leads in _group_leads_by_manager(leads).items()
+        if manager_id in sales_ids
+    }
     if not by_manager:
         logger.info("Daily report: no leads created today, nothing to send")
         return

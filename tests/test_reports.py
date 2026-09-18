@@ -82,6 +82,7 @@ class SendDailyReportsTests(unittest.IsolatedAsyncioTestCase):
             database_path=self.tmp.name + '/db.sqlite',
             bitrix_webhook_url='https://example.bitrix24.ru/rest/1/test/',
             director_user_id_set={100, 101},
+            sales_department_id='5',
         )
         self.patches = [
             patch('app.store.get_settings', return_value=self.settings),
@@ -94,6 +95,7 @@ class SendDailyReportsTests(unittest.IsolatedAsyncioTestCase):
         self.client.get_sources.return_value = [{'STATUS_ID': 'TG', 'NAME': 'Телеграм'}]
         self.client.get_lead_statuses.return_value = [{'STATUS_ID': 'JUNK', 'NAME': 'Мусор'}]
         self.client.get_user_name.return_value = 'Никита Продажников'
+        self.client.get_department_users.return_value = [{'ID': '460'}, {'ID': '999'}]
         self.bitrix_patch = patch('app.reports.BitrixClient', return_value=self.client)
         self.bitrix_patch.start()
 
@@ -135,6 +137,26 @@ class SendDailyReportsTests(unittest.IsolatedAsyncioTestCase):
         digest = next(call for call in self.send_message.call_args_list if call.kwargs['chat_id'] == 100)
         self.assertIn('Никита Продажников', digest.args[0])
         self.assertIn('Сводный отчёт', digest.args[0])
+
+    async def test_users_outside_sales_department_are_excluded_everywhere(self):
+        store.link_manager('777', 'Не продажник', 888)
+        self.client.get_leads_created_between.return_value = [
+            {'ID': '1', 'SOURCE_ID': 'TG', 'STATUS_ID': 'JUNK', 'ASSIGNED_BY_ID': '460'},
+            {'ID': '2', 'SOURCE_ID': 'TG', 'STATUS_ID': 'JUNK', 'ASSIGNED_BY_ID': '777'},
+        ]
+        await reports.send_daily_reports()
+        chat_ids = {call.kwargs['chat_id'] for call in self.send_message.call_args_list}
+        self.assertNotIn(888, chat_ids)
+        digest = next(call for call in self.send_message.call_args_list if call.kwargs['chat_id'] == 100)
+        self.assertIn('Всего: 1', digest.args[0])
+        self.assertNotIn('№2</a>', digest.args[0])
+
+    async def test_only_non_sales_leads_send_nothing(self):
+        self.client.get_leads_created_between.return_value = [
+            {'ID': '2', 'SOURCE_ID': 'TG', 'STATUS_ID': 'JUNK', 'ASSIGNED_BY_ID': '777'},
+        ]
+        await reports.send_daily_reports()
+        self.send_message.assert_not_awaited()
 
     async def test_leads_without_assignee_are_skipped(self):
         self.client.get_leads_created_between.return_value = [
