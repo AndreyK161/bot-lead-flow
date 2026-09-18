@@ -50,6 +50,15 @@ class StoreLinkingTests(unittest.TestCase):
         names = [link['bitrix_name'] for link in store.list_links()]
         self.assertEqual(names, ['Анна', 'Борис'])
 
+    def test_seen_lead_can_be_found_by_normalized_phone(self):
+        store.record_seen_lead({'ID':'20462','PHONE':[{'VALUE':'+7 (952) 123-45-67'}]})
+        self.assertTrue(store.was_lead_seen('20462'))
+        self.assertEqual(store.find_seen_lead_by_phones(['8 952 123 45 67']),'20462')
+
+    def test_unknown_phone_does_not_create_false_relation(self):
+        store.record_seen_lead({'ID':'1','PHONE':[{'VALUE':'+7 900 111-22-33'}]})
+        self.assertIsNone(store.find_seen_lead_by_phones(['+7 900 999-88-77']))
+
 
 if __name__ == '__main__':
     unittest.main()

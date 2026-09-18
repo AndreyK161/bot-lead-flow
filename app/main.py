@@ -107,6 +107,7 @@ async def bitrix_webhook(request: Request) -> dict[str, str]:
 
     try:
         lead = await client.get_lead(lead_id)
+        store.record_seen_lead(lead)
 
         # "Ручной" бот публикует уведомление сам после создания лида — здесь его дублировать не надо.
         if str(lead.get("SOURCE_DESCRIPTION", "")).startswith(manual.MARKER):

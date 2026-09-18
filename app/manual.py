@@ -149,6 +149,7 @@ async def publish(row):
         return
     client = BitrixClient()
     lead = await client.get_lead(row['lead_id'])
+    store.record_seen_lead(lead)
     text = build_lead_notification(lead, portal_domain=urlparse(get_settings().bitrix_webhook_url).netloc,
                                    source_name=row['source_name'])
     for chat_id in pending:

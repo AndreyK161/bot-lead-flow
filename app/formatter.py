@@ -101,11 +101,25 @@ def build_manage_keyboard(lead_id: str | int) -> dict[str, Any]:
 
 def build_deal_notification(deal: dict[str, Any], *, contact: dict[str, Any] | None = None,
                             portal_domain: str | None = None, source_name: str | None = None,
-                            assigned_name: str | None = None, is_junk: bool = False) -> str:
+                            assigned_name: str | None = None, is_junk: bool = False,
+                            related_lead_id: str | None = None,
+                            relation_kind: str | None = None) -> str:
     lines = ["🗑 <b>Сделка отправлена на стадию «Мусор»</b>" if is_junk else "🆕 <b>Новая сделка</b>"]
     title = deal.get("TITLE")
     if title:
         lines.append(f"📋 {escape(str(title))}")
+    if related_lead_id:
+        if relation_kind == "exact_seen":
+            relation_label = "Создана из ранее записанного лида"
+        elif relation_kind == "exact":
+            relation_label = "Создана из лида"
+        else:
+            relation_label = "Контакт совпадает с ранее записанным лидом"
+        if portal_domain:
+            lead_url = CRM_LEAD_URL_TEMPLATE.format(portal=portal_domain, lead_id=related_lead_id)
+            lines.append(f'🔁 {relation_label}: <a href="{escape(lead_url)}">№{escape(str(related_lead_id))}</a>')
+        else:
+            lines.append(f"🔁 {relation_label}: №{escape(str(related_lead_id))}")
     if contact:
         full_name = _build_full_name(contact)
         if full_name:

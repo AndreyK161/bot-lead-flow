@@ -46,6 +46,13 @@ def db():
         CREATE TABLE IF NOT EXISTS metadata (
             key TEXT PRIMARY KEY, value TEXT NOT NULL
         );
+        CREATE TABLE IF NOT EXISTS seen_leads (
+            lead_id TEXT PRIMARY KEY, seen_at TEXT DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS seen_lead_phones (
+            lead_id TEXT NOT NULL, phone TEXT NOT NULL,
+            PRIMARY KEY (lead_id, phone)
+        );
     ''')
     try:
         with conn:
@@ -105,3 +112,38 @@ def manager_telegram_id(bitrix_user_id):
 
 def list_links():
     return rows('SELECT * FROM manager_links ORDER BY bitrix_name')
+
+
+def _normalized_phone(value):
+    digits = ''.join(char for char in str(value or '') if char.isdigit())
+    return digits[-10:] if len(digits) >= 10 else digits
+
+
+def record_seen_lead(lead):
+    lead_id = str(lead.get('ID') or '')
+    if not lead_id:
+        return
+    execute('INSERT OR IGNORE INTO seen_leads (lead_id) VALUES (?)', (lead_id,))
+    for item in lead.get('PHONE') or []:
+        phone = _normalized_phone((item or {}).get('VALUE'))
+        if phone:
+            execute('INSERT OR IGNORE INTO seen_lead_phones VALUES (?,?)', (lead_id, phone))
+
+
+def was_lead_seen(lead_id):
+    if not lead_id:
+        return False
+    return bool(rows('SELECT 1 FROM seen_leads WHERE lead_id=?', (str(lead_id),))) or by_lead(lead_id) is not None
+
+
+def find_seen_lead_by_phones(raw_phones):
+    phones = [_normalized_phone(value) for value in raw_phones]
+    phones = [phone for phone in phones if phone]
+    if not phones:
+        return None
+    placeholders = ','.join('?' for _ in phones)
+    result = rows(
+        f'SELECT lead_id FROM seen_lead_phones WHERE phone IN ({placeholders}) ORDER BY rowid DESC LIMIT 1',
+        tuple(phones),
+    )
+    return result[0]['lead_id'] if result else None

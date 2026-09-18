@@ -69,6 +69,21 @@ class DealTrackingTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('Сделка отправлена на стадию «Мусор»',edit.call_args.args[2])
         self.assertIn('/crm/deal/details/101/',edit.call_args.args[2])
 
+    async def test_exact_lead_relation_is_marked_as_previously_seen(self):
+        store.record_seen_lead({'ID':'20462','PHONE':[]})
+        self.client.get_deal.return_value['LEAD_ID']='20462'
+        await deals.track('101')
+        text=self.send.call_args_list[0].args[0]
+        self.assertIn('Создана из ранее записанного лида',text)
+        self.assertIn('/crm/lead/details/20462/',text)
+
+    async def test_phone_relation_fallback_when_copy_lost_lead_id(self):
+        store.record_seen_lead({'ID':'20460','PHONE':[{'VALUE':'8 999 000-00-00'}]})
+        await deals.track('101')
+        text=self.send.call_args_list[0].args[0]
+        self.assertIn('Контакт совпадает с ранее записанным лидом',text)
+        self.assertIn('/crm/lead/details/20460/',text)
+
 
 class DealJunkApiTests(unittest.IsolatedAsyncioTestCase):
     def client(self,final='UC_K0Z3P6'):

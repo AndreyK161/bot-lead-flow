@@ -29,9 +29,19 @@ async def render(deal: dict, *, is_junk: bool = False) -> str:
     contact = await client.get_contact(deal["CONTACT_ID"]) if deal.get("CONTACT_ID") else None
     source_name = await client.get_source_name(deal.get("SOURCE_ID", ""))
     assigned_name = await client.get_user_name(str(deal.get("ASSIGNED_BY_ID") or ""))
+    exact_lead_id = str(deal.get("LEAD_ID") or "") or None
+    related_lead_id = exact_lead_id
+    relation_kind = "exact_seen" if exact_lead_id and store.was_lead_seen(exact_lead_id) else "exact" if exact_lead_id else None
+    if not related_lead_id and contact:
+        related_lead_id = store.find_seen_lead_by_phones(
+            [(item or {}).get("VALUE") for item in contact.get("PHONE") or []]
+        )
+        if related_lead_id:
+            relation_kind = "phone"
     return build_deal_notification(
         deal, contact=contact, portal_domain=urlparse(get_settings().bitrix_webhook_url).netloc,
         source_name=source_name, assigned_name=assigned_name, is_junk=is_junk,
+        related_lead_id=related_lead_id, relation_kind=relation_kind,
     )
 
 
