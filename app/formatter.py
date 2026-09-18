@@ -236,7 +236,8 @@ def build_daily_report_body(
 
     blocks = []
     for source_name, by_status in by_source.items():
-        lines = [f"<b>{escape(str(source_name))}</b>"]
+        source_total = sum(len(lead_ids) for lead_ids in by_status.values())
+        lines = [f"<b>{escape(str(source_name))}</b> (Итого: {source_total})"]
         for status_name, lead_ids in by_status.items():
             links = ", ".join(
                 f'<a href="{escape(CRM_LEAD_URL_TEMPLATE.format(portal=portal_domain, lead_id=lead_id))}">№{escape(lead_id)}</a>'

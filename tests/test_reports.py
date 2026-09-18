@@ -25,7 +25,7 @@ class BuildDailyReportBodyTests(unittest.TestCase):
             {'ID': '1', 'SOURCE_ID': 'TG', 'STATUS_ID': 'JUNK'},
             {'ID': '2', 'SOURCE_ID': 'TG', 'STATUS_ID': 'JUNK'},
         ])
-        self.assertEqual(text, f'<b>Телеграм</b>\n• «Мусор» — {self.link(1)}, {self.link(2)}\n\n<b>Всего: 2</b>')
+        self.assertEqual(text, f'<b>Телеграм</b> (Итого: 2)\n• «Мусор» — {self.link(1)}, {self.link(2)}\n\n<b>Всего: 2</b>')
 
     def test_different_stages_are_on_separate_lines_and_non_adjacent_leads_grouped(self):
         text = self.body([
@@ -35,14 +35,14 @@ class BuildDailyReportBodyTests(unittest.TestCase):
         ])
         self.assertIn(f'• «Мусор» — {self.link(1)}, {self.link(3)}', text)
         self.assertIn(f'• «Не обработан» — {self.link(2)}', text)
-        self.assertEqual(text.count('<b>Телеграм</b>'), 1)
+        self.assertEqual(text.count('<b>Телеграм</b> (Итого: 3)'), 1)
 
     def test_sources_are_separated_by_blank_line(self):
         text = self.body([
             {'ID': '1', 'SOURCE_ID': 'TG', 'STATUS_ID': 'JUNK'},
             {'ID': '2', 'SOURCE_ID': 'YANDEX', 'STATUS_ID': 'JUNK'},
         ])
-        self.assertIn('\n\n<b>Яндекс</b>', text)
+        self.assertIn('\n\n<b>Яндекс</b> (Итого: 1)', text)
 
     def test_bottom_total_line_counts_all_leads(self):
         text = self.body([
@@ -52,6 +52,15 @@ class BuildDailyReportBodyTests(unittest.TestCase):
         ])
         self.assertTrue(text.endswith('<b>Всего: 3</b>'))
         self.assertNotIn('(всего:', text)
+
+    def test_each_source_shows_its_own_total(self):
+        text = self.body([
+            {'ID': '1', 'SOURCE_ID': 'TG', 'STATUS_ID': 'JUNK'},
+            {'ID': '2', 'SOURCE_ID': 'YANDEX', 'STATUS_ID': 'NEW'},
+            {'ID': '3', 'SOURCE_ID': 'YANDEX', 'STATUS_ID': 'JUNK'},
+        ])
+        self.assertIn('<b>Телеграм</b> (Итого: 1)', text)
+        self.assertIn('<b>Яндекс</b> (Итого: 2)', text)
 
     def test_unknown_source_and_status_fall_back_to_raw_id(self):
         text = self.body([{'ID': '1', 'SOURCE_ID': 'WEIRD', 'STATUS_ID': 'CUSTOM'}], source_map={}, status_map={})
