@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request, status
 
-from app import deals, manual, store
+from app import deals, manual, reports, store
 from app.bitrix_client import BitrixApiError, BitrixClient
 from app.config import get_settings
 from app.formatter import (
@@ -38,7 +38,11 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 @asynccontextmanager
 async def lifespan(app):
-    tasks = [asyncio.create_task(deals.polling_loop()), asyncio.create_task(manual.recovery_loop())]
+    tasks = [
+        asyncio.create_task(deals.polling_loop()),
+        asyncio.create_task(manual.recovery_loop()),
+        asyncio.create_task(reports.daily_report_loop()),
+    ]
     yield
     for task in tasks:
         task.cancel()

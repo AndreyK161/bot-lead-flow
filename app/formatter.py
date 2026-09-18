@@ -209,3 +209,36 @@ def build_link_target_keyboard(bitrix_user_id: str, bitrix_name: str, starts: li
         rows.append([{"text": label, "callback_data": f"link_to:{bitrix_user_id}:{start['telegram_id']}"}])
     rows.append([{"text": "⬅️ Отмена", "callback_data": "link_cancel"}])
     return {"inline_keyboard": rows}
+
+
+def build_daily_report_body(
+    leads: list[dict[str, Any]],
+    *,
+    portal_domain: str,
+    source_map: dict[str, str],
+    status_map: dict[str, str],
+) -> str:
+    """Группирует лиды одного менеджера: источник → стадия → перечень лидов одной строкой.
+
+    Пример: "Телеграм — Лид №1, Лид №2 : «Мусор», Лид №3 : «Не обработан»", в конце — "Всего: 3".
+    """
+    by_source: dict[str, dict[str, list[str]]] = {}
+    for lead in sorted(leads, key=lambda item: int(item["ID"])):
+        lead_id = str(lead["ID"])
+        source_name = source_map.get(str(lead.get("SOURCE_ID")), lead.get("SOURCE_ID") or "Без источника")
+        status_name = status_map.get(str(lead.get("STATUS_ID")), lead.get("STATUS_ID") or "—")
+        by_source.setdefault(source_name, {}).setdefault(status_name, []).append(lead_id)
+
+    lines = []
+    for source_name, by_status in by_source.items():
+        clauses = []
+        for status_name, lead_ids in by_status.items():
+            links = ", ".join(
+                f'<a href="{escape(CRM_LEAD_URL_TEMPLATE.format(portal=portal_domain, lead_id=lead_id))}">Лид №{escape(lead_id)}</a>'
+                for lead_id in lead_ids
+            )
+            clauses.append(f'{links} : «{escape(str(status_name))}»')
+        lines.append(f"{escape(str(source_name))} — " + ", ".join(clauses))
+
+    lines.append(f"\nВсего: {len(leads)}")
+    return "\n".join(lines)
