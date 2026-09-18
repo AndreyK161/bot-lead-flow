@@ -92,7 +92,7 @@ def build_lead_notification(
             lines.append(f'🔁 Совпадает по телефону с лидом <a href="{escape(dup_url)}">№{escape(str(duplicate_of_lead_id))}</a>')
         else:
             lines.append(f"🔁 Совпадает по телефону с лидом №{escape(str(duplicate_of_lead_id))}")
-        lines.append("🗑 Автоматически перенесён в «Мусор» как дубликат")
+        lines.append("🔀 Автоматически перенесён на стадию «Дубль»")
 
     if portal_domain and lead_id:
         crm_url = CRM_LEAD_URL_TEMPLATE.format(portal=portal_domain, lead_id=lead_id)

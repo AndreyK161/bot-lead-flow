@@ -112,9 +112,9 @@ async def bitrix_webhook(request: Request) -> dict[str, str]:
 
     if duplicate_of_lead_id:
         try:
-            lead = await client.move_to_junk(lead_id)
+            lead = await client.move_to_duplicate_stage(lead_id)
         except BitrixApiError:
-            logger.exception("Failed to auto-junk duplicate lead_id=%s", lead_id)
+            logger.exception("Failed to auto-move duplicate lead_id=%s to «Дубль»", lead_id)
 
     message = build_lead_notification(
         lead,

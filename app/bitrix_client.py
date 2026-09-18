@@ -90,18 +90,24 @@ class BitrixClient:
     async def update_lead(self, lead_id: str | int, fields: dict[str, Any]) -> None:
         await self._call("crm.lead.update", {"id": lead_id, "fields": fields})
 
-    async def move_to_junk(self, lead_id: str | int) -> dict[str, Any]:
-        """Resolve the actual CRM stage and verify that the update took effect."""
+    async def _move_lead_to_stage_named(self, lead_id: str | int, stage_name: str) -> dict[str, Any]:
+        """Resolve the actual CRM stage by name and verify that the update took effect."""
         stages = await self._call("crm.status.list", {"filter": {"ENTITY_ID": "STATUS"}})
-        matches = [stage for stage in stages if str(stage.get("NAME", "")).strip().casefold() == "мусор"]
+        matches = [stage for stage in stages if str(stage.get("NAME", "")).strip().casefold() == stage_name.casefold()]
         if len(matches) != 1:
-            raise BitrixApiError("Не найдена однозначная стадия «Мусор» в CRM")
-        junk_id = str(matches[0]["STATUS_ID"])
-        await self.update_lead(lead_id, {"STATUS_ID": junk_id})
+            raise BitrixApiError(f"Не найдена однозначная стадия «{stage_name}» в CRM")
+        stage_id = str(matches[0]["STATUS_ID"])
+        await self.update_lead(lead_id, {"STATUS_ID": stage_id})
         lead = await self.get_lead(lead_id)
-        if str(lead.get("STATUS_ID")) != junk_id:
-            raise BitrixApiError("Битрикс не подтвердил перенос на стадию «Мусор»")
+        if str(lead.get("STATUS_ID")) != stage_id:
+            raise BitrixApiError(f"Битрикс не подтвердил перенос на стадию «{stage_name}»")
         return lead
+
+    async def move_to_junk(self, lead_id: str | int) -> dict[str, Any]:
+        return await self._move_lead_to_stage_named(lead_id, "Мусор")
+
+    async def move_to_duplicate_stage(self, lead_id: str | int) -> dict[str, Any]:
+        return await self._move_lead_to_stage_named(lead_id, "Дубль")
 
     async def add_lead(self, fields: dict[str, Any]) -> str:
         return str(await self._call("crm.lead.add", {"fields": fields}))

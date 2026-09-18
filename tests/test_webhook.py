@@ -119,26 +119,28 @@ class BitrixWebhookTests(WebhookTestCase):
             await main.bitrix_webhook(request)
         self.assertEqual(ctx.exception.status_code, 502)
 
-    async def test_duplicate_lead_is_auto_junked_and_flagged(self):
+    async def test_duplicate_lead_is_auto_moved_to_duplicate_stage_and_flagged(self):
         self.client.get_lead.return_value = {
             'ID': '20312', 'NAME': 'Клиент', 'SOURCE_ID': 'WEB', 'ASSIGNED_BY_ID': '',
             'PHONE': [{'VALUE': '+79991234567', 'VALUE_TYPE': 'WORK'}],
         }
         self.client.find_active_duplicate_lead.return_value = '999'
-        self.client.move_to_junk.return_value = {
-            'ID': '20312', 'NAME': 'Клиент', 'SOURCE_ID': 'WEB', 'STATUS_ID': 'JUNK',
+        self.client.move_to_duplicate_stage.return_value = {
+            'ID': '20312', 'NAME': 'Клиент', 'SOURCE_ID': 'WEB', 'STATUS_ID': 'UC_DUP',
             'PHONE': [{'VALUE': '+79991234567', 'VALUE_TYPE': 'WORK'}],
         }
         request = form_request(**{'auth[application_token]': 'apptoken', 'event': 'ONCRMLEADADD', 'data[FIELDS][ID]': '20312'})
         result = await main.bitrix_webhook(request)
         self.assertEqual(result, {'status': 'ok'})
         self.client.find_active_duplicate_lead.assert_awaited_once_with(['+79991234567'], exclude_lead_id='20312')
-        self.client.move_to_junk.assert_awaited_once_with('20312')
+        self.client.move_to_duplicate_stage.assert_awaited_once_with('20312')
+        self.client.move_to_junk.assert_not_awaited()
         text = self.send_message.call_args.args[0]
         self.assertIn('Дубликат', text)
+        self.assertIn('Дубль', text)
         self.assertIn('№999', text)
 
-    async def test_non_duplicate_lead_is_not_junked(self):
+    async def test_non_duplicate_lead_is_not_moved(self):
         self.client.get_lead.return_value = {
             'ID': '20312', 'NAME': 'Клиент', 'SOURCE_ID': 'WEB', 'ASSIGNED_BY_ID': '',
             'PHONE': [{'VALUE': '+79991234567', 'VALUE_TYPE': 'WORK'}],
@@ -147,7 +149,7 @@ class BitrixWebhookTests(WebhookTestCase):
         request = form_request(**{'auth[application_token]': 'apptoken', 'event': 'ONCRMLEADADD', 'data[FIELDS][ID]': '20312'})
         result = await main.bitrix_webhook(request)
         self.assertEqual(result, {'status': 'ok'})
-        self.client.move_to_junk.assert_not_awaited()
+        self.client.move_to_duplicate_stage.assert_not_awaited()
         text = self.send_message.call_args.args[0]
         self.assertNotIn('Дубликат', text)
 
