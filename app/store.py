@@ -18,7 +18,8 @@ def db():
             id TEXT PRIMARY KEY, update_id INTEGER UNIQUE, chat_id INTEGER,
             message_id INTEGER, contact TEXT, state TEXT DEFAULT 'draft',
             source_id TEXT, source_name TEXT, lead_id TEXT UNIQUE,
-            manager TEXT, main_message_id INTEGER, dirty INTEGER DEFAULT 1
+            manager TEXT, manager_id TEXT, comment TEXT, bot_kind TEXT DEFAULT 'legacy',
+            main_message_id INTEGER, dirty INTEGER DEFAULT 1
         );
         CREATE TABLE IF NOT EXISTS sources (
             id TEXT PRIMARY KEY, name TEXT NOT NULL, enabled INTEGER NOT NULL
@@ -54,6 +55,13 @@ def db():
             PRIMARY KEY (lead_id, phone)
         );
     ''')
+    submission_columns = {row[1] for row in conn.execute('PRAGMA table_info(submissions)')}
+    if 'manager_id' not in submission_columns:
+        conn.execute('ALTER TABLE submissions ADD COLUMN manager_id TEXT')
+    if 'comment' not in submission_columns:
+        conn.execute('ALTER TABLE submissions ADD COLUMN comment TEXT')
+    if 'bot_kind' not in submission_columns:
+        conn.execute("ALTER TABLE submissions ADD COLUMN bot_kind TEXT DEFAULT 'legacy'")
     try:
         conn.execute('ALTER TABLE submissions ADD COLUMN duplicate_of TEXT')
     except sqlite3.OperationalError:

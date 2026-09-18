@@ -182,6 +182,22 @@ class TelegramWebhookAuthTests(WebhookTestCase):
         await main.telegram_webhook(request)
         self.assertEqual(store.recent_starts(), [])
 
+    async def test_phone_message_is_routed_to_manual_flow(self):
+        message={'chat': {'id': 100, 'type': 'private'}, 'from': {'id': 100}, 'text': '+79990000000'}
+        request=json_request(headers={'X-Telegram-Bot-Api-Secret-Token':'secret'},update_id=77,message=message)
+        with patch('app.main.manual.handle_main_message',new=AsyncMock(return_value=True)) as handle:
+            result=await main.telegram_webhook(request)
+        self.assertEqual(result,{'status':'ok'})
+        handle.assert_awaited_once_with(message,77)
+
+    async def test_manual_callback_is_acknowledged_before_processing(self):
+        callback={'id':'cb-manual','from':{'id':100},'data':'ms:abc:tg','message':{'chat':{'id':100},'message_id':1}}
+        request=json_request(headers={'X-Telegram-Bot-Api-Secret-Token':'secret'},update_id=78,callback_query=callback)
+        with patch('app.main.manual.handle_main_callback',new=AsyncMock(return_value=True)) as handle:
+            await main.telegram_webhook(request)
+        self.answer_cb.assert_awaited_once_with('cb-manual')
+        handle.assert_awaited_once_with(callback,78)
+
 
 class RoleSeparationTests(WebhookTestCase):
     async def test_director_cannot_use_link_command(self):

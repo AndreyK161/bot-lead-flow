@@ -9,10 +9,9 @@ import httpx
 from app.config import get_settings
 
 
-async def _call(method: str, payload: dict[str, Any], *, manual: bool = False) -> dict[str, Any]:
+async def _call(method: str, payload: dict[str, Any]) -> dict[str, Any]:
     settings = get_settings()
-    token = settings.manual_bot_token if manual else settings.telegram_bot_token
-    url = f"https://api.telegram.org/bot{token}/{method}"
+    url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/{method}"
     async with httpx.AsyncClient(timeout=15.0) as client:
         response = await client.post(url, json=payload)
         if response.status_code >= 400:

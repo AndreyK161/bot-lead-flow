@@ -38,9 +38,7 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 @asynccontextmanager
 async def lifespan(app):
-    tasks = [asyncio.create_task(deals.polling_loop())]
-    if get_settings().manual_bot_token:
-        tasks.append(asyncio.create_task(manual.recovery_loop()))
+    tasks = [asyncio.create_task(deals.polling_loop()), asyncio.create_task(manual.recovery_loop())]
     yield
     for task in tasks:
         task.cancel()
@@ -50,23 +48,6 @@ async def lifespan(app):
 
 
 app = FastAPI(title="bot-lead-flow", lifespan=lifespan)
-
-
-@app.post("/telegram/webhook/manual")
-async def manual_webhook(request: Request) -> dict[str, str]:
-    settings = get_settings()
-    if (
-        not settings.manual_bot_token
-        or not settings.manual_webhook_secret
-        or request.headers.get("X-Telegram-Bot-Api-Secret-Token") != settings.manual_webhook_secret
-    ):
-        raise HTTPException(status_code=403, detail="Invalid webhook secret")
-    try:
-        await manual.handle(await request.json())
-    except Exception:
-        logger.exception("Manual webhook processing failed; Telegram will retry")
-        raise HTTPException(status_code=502, detail="Manual bot API error")
-    return {"status": "ok"}
 
 
 def _portal_domain(webhook_url: str) -> str | None:
@@ -174,7 +155,7 @@ async def _notify_assigned_manager(client: BitrixClient, settings, lead_id: str,
         logger.exception("Failed to notify manager telegram_id=%s about lead_id=%s", manager_chat_id, lead_id)
 
 
-async def _handle_message(message: dict, settings) -> None:
+async def _handle_message(message: dict, settings, update_id: int) -> None:
     if message.get("chat", {}).get("type") != "private":
         return
     user = message.get("from") or {}
@@ -183,7 +164,13 @@ async def _handle_message(message: dict, settings) -> None:
 
     if text == "/start":
         store.record_start(user_id, user.get("username"), user.get("first_name"))
-        await send_telegram_message("Готово — вы будете получать уведомления от бота здесь.", chat_id=user_id)
+        help_text = "Готово — вы будете получать уведомления от бота здесь."
+        if user_id in settings.director_user_id_set:
+            help_text += "\n\nДля ручной заявки отправьте номер телефона.\n/source — настроить источники\n/cancel — отменить ввод заявки"
+        await send_telegram_message(help_text, chat_id=user_id)
+        return
+
+    if await manual.handle_main_message(message, update_id):
         return
 
     if user_id not in settings.admin_user_id_set:
@@ -213,15 +200,21 @@ async def _handle_message(message: dict, settings) -> None:
 
 
 LINK_ACTIONS = {"link_pick", "link_to", "link_cancel"}
+SOURCE_ACTIONS = {"mp", "mt"}
 
 
-async def _handle_callback(callback_query: dict, settings) -> None:
+async def _handle_callback(callback_query: dict, settings, update_id: int) -> None:
     callback_id = callback_query["id"]
     from_user_id = callback_query["from"]["id"]
 
     data = callback_query.get("data", "")
     action_prefix = data.split(":", 1)[0]
-    allowed_set = settings.admin_user_id_set if action_prefix in LINK_ACTIONS else settings.director_user_id_set
+    if action_prefix in LINK_ACTIONS:
+        allowed_set = settings.admin_user_id_set
+    elif action_prefix in SOURCE_ACTIONS:
+        allowed_set = settings.admin_user_id_set | settings.director_user_id_set
+    else:
+        allowed_set = settings.director_user_id_set
 
     if from_user_id not in allowed_set:
         await answer_callback_query(callback_id, text="Нет доступа", show_alert=True)
@@ -238,6 +231,10 @@ async def _handle_callback(callback_query: dict, settings) -> None:
     )
 
     try:
+        if action_prefix in manual.MAIN_ACTIONS:
+            await answer_callback_query(callback_id)
+            await manual.handle_main_callback(callback_query, update_id)
+            return
         parts = data.split(":")
         action = parts[0]
 
@@ -294,7 +291,7 @@ async def _handle_callback(callback_query: dict, settings) -> None:
             lead_id, user_id = parts[1], parts[2]
             client = BitrixClient()
             async with manual.lock:
-                row = store.by_lead(lead_id) if settings.manual_bot_token else None
+                row = store.by_lead(lead_id)
                 if row and row["state"] == "deleted":
                     await answer_callback_query(callback_id, text="Лид уже удалён", show_alert=True)
                     return
@@ -323,7 +320,7 @@ async def _handle_callback(callback_query: dict, settings) -> None:
             client = BitrixClient()
             async with manual.lock:
                 lead = await client.move_to_junk(lead_id)
-                row = store.by_lead(lead_id) if settings.manual_bot_token else None
+                row = store.by_lead(lead_id)
                 if row:
                     store.save(row["id"], state="junk", dirty=1)
                 source_name = await client.get_source_name(lead.get("SOURCE_ID", ""))
@@ -388,12 +385,12 @@ async def telegram_webhook(request: Request) -> dict[str, str]:
 
     message = update.get("message")
     if message is not None:
-        await _handle_message(message, settings)
+        await _handle_message(message, settings, update.get("update_id", 0))
         return {"status": "ok"}
 
     callback_query = update.get("callback_query")
     if callback_query is not None:
-        await _handle_callback(callback_query, settings)
+        await _handle_callback(callback_query, settings, update.get("update_id", 0))
         return {"status": "ok"}
 
     return {"status": "ignored"}

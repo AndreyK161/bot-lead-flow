@@ -43,8 +43,6 @@ class Settings(BaseSettings):
     # Отдел в Bitrix, из которого предлагать список ответственных при назначении
     sales_department_id: str
 
-    manual_bot_token: str = ""
-    manual_webhook_secret: str = ""
     database_path: str = "data/leads.sqlite3"
     track_deal_category_id: str = "0"
     deal_poll_interval_seconds: int = 15
