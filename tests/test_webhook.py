@@ -76,10 +76,17 @@ class BitrixWebhookTests(WebhookTestCase):
         self.assertEqual(ctx.exception.status_code, 403)
 
     async def test_ignores_other_events(self):
-        request = form_request(**{'auth[application_token]': 'apptoken', 'event': 'ONCRMDEALADD'})
+        request = form_request(**{'auth[application_token]': 'apptoken', 'event': 'ONCRMCONTACTADD'})
         result = await main.bitrix_webhook(request)
         self.assertEqual(result, {'status': 'ignored'})
         self.client.get_lead.assert_not_awaited()
+
+    async def test_routes_new_deal_event_to_deal_tracker(self):
+        request = form_request(**{'auth[application_token]': 'apptoken', 'event': 'ONCRMDEALADD', 'data[FIELDS][ID]': '19406'})
+        with patch('app.main.deals.track', new=AsyncMock(return_value=True)) as track:
+            result = await main.bitrix_webhook(request)
+        self.assertEqual(result, {'status': 'ok'})
+        track.assert_awaited_once_with('19406')
 
     async def test_sends_dm_to_every_director(self):
         self.settings.director_user_id_set = {100, 101}

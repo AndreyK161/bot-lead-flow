@@ -46,6 +46,8 @@ class Settings(BaseSettings):
     manual_bot_token: str = ""
     manual_webhook_secret: str = ""
     database_path: str = "data/leads.sqlite3"
+    track_deal_category_id: str = "0"
+    deal_poll_interval_seconds: int = 15
 
 
 @lru_cache

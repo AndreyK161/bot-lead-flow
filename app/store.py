@@ -36,6 +36,16 @@ def db():
             bitrix_user_id TEXT PRIMARY KEY, bitrix_name TEXT, telegram_id INTEGER NOT NULL,
             linked_at TEXT DEFAULT CURRENT_TIMESTAMP
         );
+        CREATE TABLE IF NOT EXISTS deal_notifications (
+            deal_id TEXT PRIMARY KEY, dirty INTEGER NOT NULL DEFAULT 1
+        );
+        CREATE TABLE IF NOT EXISTS deal_deliveries (
+            deal_id TEXT NOT NULL, chat_id TEXT NOT NULL, message_id INTEGER NOT NULL,
+            PRIMARY KEY (deal_id, chat_id)
+        );
+        CREATE TABLE IF NOT EXISTS metadata (
+            key TEXT PRIMARY KEY, value TEXT NOT NULL
+        );
     ''')
     try:
         with conn:

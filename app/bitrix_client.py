@@ -32,6 +32,12 @@ LEAD_SELECT_FIELDS = [
     "STATUS_ID",
 ]
 
+DEAL_SELECT_FIELDS = [
+    "ID", "TITLE", "CATEGORY_ID", "STAGE_ID", "SOURCE_ID",
+    "SOURCE_DESCRIPTION", "COMMENTS", "ASSIGNED_BY_ID", "CONTACT_ID",
+    "UTM_SOURCE", "UTM_MEDIUM", "UTM_CAMPAIGN", "UTM_CONTENT", "UTM_TERM",
+]
+
 
 class BitrixClient:
     def __init__(self, webhook_url: str | None = None) -> None:
@@ -102,6 +108,44 @@ class BitrixClient:
 
     async def get_sources(self) -> list[dict[str, Any]]:
         return await self._call("crm.status.list", {"filter": {"ENTITY_ID": "SOURCE"}, "order": {"SORT": "ASC"}})
+
+    async def get_deal(self, deal_id: str | int) -> dict[str, Any]:
+        return await self._call("crm.deal.get", {"id": deal_id, "select": DEAL_SELECT_FIELDS})
+
+    async def get_contact(self, contact_id: str | int) -> dict[str, Any]:
+        return await self._call("crm.contact.get", {"id": contact_id})
+
+    async def get_new_deals(self, category_id: str, after_id: str | int) -> list[dict[str, Any]]:
+        return await self._call("crm.deal.list", {
+            "order": {"ID": "ASC"},
+            "filter": {">ID": int(after_id), "CATEGORY_ID": category_id},
+            "select": DEAL_SELECT_FIELDS,
+        })
+
+    async def get_latest_deal_id(self, category_id: str) -> str:
+        result = await self._call("crm.deal.list", {
+            "order": {"ID": "DESC"}, "filter": {"CATEGORY_ID": category_id},
+            "select": ["ID"], "start": 0,
+        })
+        return str(result[0]["ID"]) if result else "0"
+
+    async def update_deal(self, deal_id: str | int, fields: dict[str, Any]) -> None:
+        await self._call("crm.deal.update", {"id": deal_id, "fields": fields})
+
+    async def move_deal_to_junk(self, deal_id: str | int) -> dict[str, Any]:
+        deal = await self.get_deal(deal_id)
+        category_id = str(deal.get("CATEGORY_ID", "0"))
+        entity_id = "DEAL_STAGE" if category_id == "0" else f"DEAL_STAGE_{category_id}"
+        stages = await self._call("crm.status.list", {"filter": {"ENTITY_ID": entity_id}})
+        matches = [stage for stage in stages if str(stage.get("NAME", "")).strip().casefold() == "мусор"]
+        if len(matches) != 1:
+            raise BitrixApiError("Не найдена однозначная стадия «Мусор» в воронке сделки")
+        stage_id = str(matches[0]["STATUS_ID"])
+        await self.update_deal(deal_id, {"STAGE_ID": stage_id})
+        deal = await self.get_deal(deal_id)
+        if str(deal.get("STAGE_ID")) != stage_id:
+            raise BitrixApiError("Битрикс не подтвердил перенос сделки на стадию «Мусор»")
+        return deal
 
 
 class BitrixApiError(RuntimeError):

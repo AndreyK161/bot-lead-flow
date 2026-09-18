@@ -14,10 +14,12 @@ class ManualTests(unittest.IsolatedAsyncioTestCase):
         self.tmp = tempfile.TemporaryDirectory()
         self.settings = SimpleNamespace(database_path=self.tmp.name+'/db.sqlite', director_user_id_set={123}, admin_user_id_set=set(),
             manual_bot_token='test', manual_webhook_secret='secret', telegram_chat_id='-100',
+            notification_chat_ids=['-100'], track_deal_category_id='0',
             bitrix_webhook_url='https://example.com/rest/1/test/', sales_department_id='5')
         self.patches = [patch('app.store.get_settings', return_value=self.settings),
                         patch('app.manual.get_settings', return_value=self.settings),
-                        patch('app.main.get_settings', return_value=self.settings)]
+                        patch('app.main.get_settings', return_value=self.settings),
+                        patch('app.deals.get_settings', return_value=self.settings)]
         for p in self.patches: p.start()
         self.client = AsyncMock()
         self.client.get_sources.return_value = [{'STATUS_ID': 'vk', 'NAME': 'Вконтакте'}, {'STATUS_ID': 'max', 'NAME': 'Max Станислава'}, {'STATUS_ID': 'yandex', 'NAME': 'Яндекс'}]
@@ -32,8 +34,11 @@ class ManualTests(unittest.IsolatedAsyncioTestCase):
                          patch('app.manual.send_telegram_message', new=AsyncMock(return_value={'message_id': 99})),
                          patch('app.manual.edit_message_text', new=AsyncMock()),
                          patch('app.main.edit_message_text', new=AsyncMock()), patch('app.main.answer_callback_query', new=AsyncMock())]
-        for p in self.patches[3:]: p.start()
+        self.patches += [patch('app.deals.BitrixClient', return_value=self.client), patch('app.deals.edit_message_text', new=AsyncMock())]
+        for p in self.patches[4:]: p.start()
         manual.lock = asyncio.Lock()
+        from app import deals
+        deals.lock = asyncio.Lock()
 
     async def asyncTearDown(self):
         for p in reversed(self.patches): p.stop()
@@ -95,6 +100,27 @@ class ManualTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('Отправлен на стадию «Мусор»',text)
         self.assertNotIn('Новый лид',text)
         self.assertEqual(store.submission(row['id'])['state'],'junk')
+
+    async def test_main_deal_assignment_and_junk_actions(self):
+        from app import deals
+        store.execute('INSERT INTO deal_notifications VALUES (?,0)',('77',))
+        store.execute('INSERT INTO deal_deliveries VALUES (?,?,?)',('77','123',55))
+        deal={'ID':'77','TITLE':'Сделка','CATEGORY_ID':'0','STAGE_ID':'NEW','SOURCE_ID':'WEB','ASSIGNED_BY_ID':'7'}
+        self.client.get_deal.return_value=deal
+        self.client.move_deal_to_junk.return_value=deal | {'STAGE_ID':'UC_K0Z3P6'}
+        self.client.get_department_users.return_value=[{'ID':'7','NAME':'Иван'}]
+        self.client.get_user_name.return_value='Иван'
+        self.client.get_contact.return_value={}
+        self.settings.telegram_webhook_secret='main-secret'
+        for data in ('dau:77:7','dj:77'):
+            cb=self.callback(data.split(':')[0],{'id':':'.join(data.split(':')[1:])})['callback_query']
+            cb['message']['text']='Сделка'
+            request=SimpleNamespace(headers={'X-Telegram-Bot-Api-Secret-Token':'main-secret'},json=AsyncMock(return_value={'callback_query':cb}))
+            await main.telegram_webhook(request)
+        self.client.update_deal.assert_awaited_once_with('77',{'ASSIGNED_BY_ID':'7'})
+        self.client.move_deal_to_junk.assert_awaited_once_with('77')
+        texts=[call.args[2] for call in deals.edit_message_text.call_args_list]
+        self.assertTrue(any('Сделка отправлена на стадию «Мусор»' in text for text in texts))
 
     async def test_sources_and_retry_toggle_persist(self):
         await manual.refresh_sources()

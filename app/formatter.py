@@ -6,6 +6,7 @@ from html import escape
 from typing import Any
 
 CRM_LEAD_URL_TEMPLATE = "https://{portal}/crm/lead/details/{lead_id}/"
+CRM_DEAL_URL_TEMPLATE = "https://{portal}/crm/deal/details/{deal_id}/"
 
 
 def _extract_multifield_values(raw: Any) -> list[str]:
@@ -96,6 +97,60 @@ def build_manage_keyboard(lead_id: str | int) -> dict[str, Any]:
             [{"text": "🛠 Управлять", "callback_data": f"m:{lead_id}"}],
         ]
     }
+
+
+def build_deal_notification(deal: dict[str, Any], *, contact: dict[str, Any] | None = None,
+                            portal_domain: str | None = None, source_name: str | None = None,
+                            assigned_name: str | None = None, is_junk: bool = False) -> str:
+    lines = ["🗑 <b>Сделка отправлена на стадию «Мусор»</b>" if is_junk else "🆕 <b>Новая сделка</b>"]
+    title = deal.get("TITLE")
+    if title:
+        lines.append(f"📋 {escape(str(title))}")
+    if contact:
+        full_name = _build_full_name(contact)
+        if full_name:
+            lines.append(f"👤 {escape(full_name)}")
+        phones = _extract_multifield_values(contact.get("PHONE"))
+        if phones:
+            lines.append("📞 " + ", ".join(f"<code>{escape(phone)}</code>" for phone in phones))
+        emails = _extract_multifield_values(contact.get("EMAIL"))
+        if emails:
+            lines.append("✉️ " + ", ".join(f"<code>{escape(email)}</code>" for email in emails))
+    if source_name or deal.get("SOURCE_ID"):
+        lines.append(f"🌐 Источник: {escape(str(source_name or deal['SOURCE_ID']))}")
+    if deal.get("SOURCE_DESCRIPTION"):
+        description = str(deal["SOURCE_DESCRIPTION"])
+        lines.append(f"📝 {escape(description[:1600] + ('…' if len(description) > 1600 else ''))}")
+    if deal.get("COMMENTS"):
+        comments = str(deal["COMMENTS"])
+        lines.append(f"💬 {escape(comments[:1000] + ('…' if len(comments) > 1000 else ''))}")
+    if assigned_name:
+        lines.append(f"👔 Ответственный: {escape(assigned_name)}")
+    if portal_domain and deal.get("ID"):
+        url = CRM_DEAL_URL_TEMPLATE.format(portal=portal_domain, deal_id=deal["ID"])
+        lines.append(f'🔗 <a href="{escape(url)}">Открыть сделку в CRM</a>')
+    return "\n".join(lines)
+
+
+def build_deal_manage_keyboard(deal_id: str | int) -> dict[str, Any]:
+    return {"inline_keyboard": [[{"text": "🛠 Управлять", "callback_data": f"dm:{deal_id}"}]]}
+
+
+def build_deal_action_keyboard(deal_id: str | int) -> dict[str, Any]:
+    return {"inline_keyboard": [
+        [{"text": "👤 Назначить ответственного", "callback_data": f"da:{deal_id}"}],
+        [{"text": "🗑 В мусор", "callback_data": f"dj:{deal_id}"}],
+        [{"text": "⬅️ Назад", "callback_data": f"db:{deal_id}"}],
+    ]}
+
+
+def build_deal_assign_keyboard(deal_id: str | int, users: list[dict[str, Any]]) -> dict[str, Any]:
+    rows = []
+    for user in users:
+        name = " ".join(p for p in (user.get("NAME"), user.get("LAST_NAME")) if p) or user.get("EMAIL") or user["ID"]
+        rows.append([{"text": name, "callback_data": f"dau:{deal_id}:{user['ID']}"}])
+    rows.append([{"text": "⬅️ Назад", "callback_data": f"db:{deal_id}"}])
+    return {"inline_keyboard": rows}
 
 
 def build_action_keyboard(lead_id: str | int) -> dict[str, Any]:

@@ -1,4 +1,4 @@
-"""FastAPI-сервис: приём лидов из Bitrix24 (ONCRMLEADADD), уведомления и управление в Telegram."""
+"""FastAPI service for Bitrix24 leads/deals, Telegram notifications and management."""
 
 from __future__ import annotations
 
@@ -9,12 +9,15 @@ from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request, status
 
-from app import manual, store
+from app import deals, manual, store
 from app.bitrix_client import BitrixApiError, BitrixClient
 from app.config import get_settings
 from app.formatter import (
     build_action_keyboard,
     build_assign_keyboard,
+    build_deal_action_keyboard,
+    build_deal_assign_keyboard,
+    build_deal_manage_keyboard,
     build_lead_notification,
     build_link_pick_keyboard,
     build_link_target_keyboard,
@@ -35,10 +38,13 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 @asynccontextmanager
 async def lifespan(app):
-    task = asyncio.create_task(manual.recovery_loop()) if get_settings().manual_bot_token else None
+    tasks = [asyncio.create_task(deals.polling_loop())]
+    if get_settings().manual_bot_token:
+        tasks.append(asyncio.create_task(manual.recovery_loop()))
     yield
-    if task:
+    for task in tasks:
         task.cancel()
+    for task in tasks:
         with suppress(asyncio.CancelledError):
             await task
 
@@ -81,6 +87,14 @@ async def bitrix_webhook(request: Request) -> dict[str, str]:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid application token")
 
     event = form.get("event")
+    if event == "ONCRMDEALADD":
+        deal_id = form.get("data[FIELDS][ID]")
+        if not deal_id:
+            raise HTTPException(status_code=400, detail="Missing deal id")
+        async with deals.lock:
+            tracked = await deals.track(deal_id)
+        return {"status": "ok" if tracked else "ignored"}
+
     if event != "ONCRMLEADADD":
         # Не наш эндпоинт настроен на другое событие — просто игнорируем.
         return {"status": "ignored"}
@@ -213,6 +227,38 @@ async def _handle_callback(callback_query: dict, settings) -> None:
     try:
         parts = data.split(":")
         action = parts[0]
+
+        if action in {"dm", "db", "da", "dau", "dj"}:
+            deal_id = parts[1]
+            async with deals.lock:
+                client = BitrixClient()
+                if action == "dm":
+                    await edit_message_reply_markup(chat_id, message_id, build_deal_action_keyboard(deal_id))
+                elif action == "db":
+                    await edit_message_reply_markup(chat_id, message_id, build_deal_manage_keyboard(deal_id))
+                elif action == "da":
+                    users = await client.get_department_users(settings.sales_department_id)
+                    await edit_message_reply_markup(chat_id, message_id, build_deal_assign_keyboard(deal_id, users))
+                elif action == "dau":
+                    user_id = parts[2]
+                    users = await client.get_department_users(settings.sales_department_id)
+                    if user_id not in {str(user["ID"]) for user in users}:
+                        await answer_callback_query(callback_id, text="Сотрудник больше не входит в отдел", show_alert=True)
+                        return {"status": "ignored"}
+                    await client.update_deal(deal_id, {"ASSIGNED_BY_ID": user_id})
+                    deal = await client.get_deal(deal_id)
+                    await deals.refresh_cards(deal)
+                elif action == "dj":
+                    deal = await client.move_deal_to_junk(deal_id)
+                    await deals.refresh_cards(deal, is_junk=True)
+            messages = {"dau": "Ответственный назначен", "dj": "Сделка отправлена на стадию «Мусор»"}
+            await answer_callback_query(callback_id, text=messages.get(action))
+            if action == "dau":
+                try:
+                    await deals.notify_assigned_manager(deal, user_id)
+                except Exception:
+                    logger.exception("Failed to notify assigned manager about deal_id=%s", deal_id)
+            return {"status": "ok"}
 
         if action == "m":
             lead_id = parts[1]
