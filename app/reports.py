@@ -70,8 +70,8 @@ async def send_daily_reports() -> None:
                 logger.exception("Failed to send daily report to manager telegram_id=%s", manager_chat_id)
 
     manager_blocks.sort(key=lambda item: item[0])
-    digest_text = f"📊 <b>Сводный отчёт за {today_label}</b>\n\n" + "\n\n".join(
-        f"<b>{escape(name)}</b>\n{body}" for name, body in manager_blocks
+    digest_text = f"📊 <b>Сводный отчёт за {today_label}</b>\n\n" + "\n\n──────────\n\n".join(
+        f"👤 <b>{escape(name)}</b>\n\n{body}" for name, body in manager_blocks
     )
     for director_id in settings.director_user_id_set:
         try:
