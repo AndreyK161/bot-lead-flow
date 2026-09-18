@@ -148,6 +148,17 @@ def was_lead_seen(lead_id):
     return bool(rows('SELECT 1 FROM seen_leads WHERE lead_id=?', (str(lead_id),))) or by_lead(lead_id) is not None
 
 
+def find_all_seen_lead_ids_by_phones(raw_phones):
+    """Все ID лидов (из локального кэша), чей нормализованный телефон совпадает — для антидубль-проверки."""
+    phones = [_normalized_phone(value) for value in raw_phones]
+    phones = [phone for phone in phones if phone]
+    if not phones:
+        return []
+    placeholders = ','.join('?' for _ in phones)
+    result = rows(f'SELECT DISTINCT lead_id FROM seen_lead_phones WHERE phone IN ({placeholders})', tuple(phones))
+    return [row['lead_id'] for row in result]
+
+
 def find_seen_lead_by_phones(raw_phones):
     phones = [_normalized_phone(value) for value in raw_phones]
     phones = [phone for phone in phones if phone]

@@ -228,7 +228,10 @@ async def _create(row, telegram_user_id):
 
 async def _finish(row, telegram_user_id, *, force=False):
     if not force:
-        duplicate_id = await BitrixClient().find_active_duplicate_lead([row["contact"]])
+        duplicate_id = await BitrixClient().find_active_duplicate_lead(
+            [row["contact"]],
+            extra_candidate_ids=store.find_all_seen_lead_ids_by_phones([row["contact"]]),
+        )
         if duplicate_id:
             store.save(row["id"], state="duplicate", duplicate_of=duplicate_id, dirty=1)
             await sync(store.submission(row["id"]))

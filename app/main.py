@@ -105,7 +105,11 @@ async def bitrix_webhook(request: Request) -> dict[str, str]:
         duplicate_of_lead_id = None
         phones = [(item or {}).get("VALUE") for item in (lead.get("PHONE") or [])]
         if phones:
-            duplicate_of_lead_id = await client.find_active_duplicate_lead(phones, exclude_lead_id=lead_id)
+            duplicate_of_lead_id = await client.find_active_duplicate_lead(
+                phones,
+                exclude_lead_id=lead_id,
+                extra_candidate_ids=store.find_all_seen_lead_ids_by_phones(phones),
+            )
     except BitrixApiError:
         logger.exception("Bitrix API call failed for lead_id=%s", lead_id)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Bitrix API error")

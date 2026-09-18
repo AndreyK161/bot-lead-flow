@@ -132,7 +132,9 @@ class BitrixWebhookTests(WebhookTestCase):
         request = form_request(**{'auth[application_token]': 'apptoken', 'event': 'ONCRMLEADADD', 'data[FIELDS][ID]': '20312'})
         result = await main.bitrix_webhook(request)
         self.assertEqual(result, {'status': 'ok'})
-        self.client.find_active_duplicate_lead.assert_awaited_once_with(['+79991234567'], exclude_lead_id='20312')
+        call = self.client.find_active_duplicate_lead.call_args
+        self.assertEqual(call.args, (['+79991234567'],))
+        self.assertEqual(call.kwargs['exclude_lead_id'], '20312')
         self.client.move_to_duplicate_stage.assert_awaited_once_with('20312')
         self.client.move_to_junk.assert_not_awaited()
         text = self.send_message.call_args.args[0]

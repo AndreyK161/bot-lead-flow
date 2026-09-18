@@ -159,12 +159,23 @@ class BitrixClient:
         )
         return [str(item["ID"]) for item in result if item.get("STATUS_SEMANTIC_ID") == "P"]
 
-    async def find_active_duplicate_lead(self, phones: list[str], *, exclude_lead_id: str | int | None = None) -> str | None:
-        """Ищет активный лид с тем же телефоном (кроме исключённого) — самый свежий по ID."""
-        candidates = await self.find_duplicate_lead_ids(phones)
+    async def find_active_duplicate_lead(
+        self,
+        phones: list[str],
+        *,
+        exclude_lead_id: str | int | None = None,
+        extra_candidate_ids: list[str] | None = None,
+    ) -> str | None:
+        """Ищет активный лид с тем же телефоном (кроме исключённого) — самый свежий по ID.
+
+        Помимо встроенного поиска Bitrix (который не всегда считает +7/8-варианты одним номером),
+        принимает extra_candidate_ids — кандидатов из локального кэша с честной нормализацией.
+        """
+        candidates = set(await self.find_duplicate_lead_ids(phones))
+        candidates.update(str(c) for c in (extra_candidate_ids or []))
         if exclude_lead_id is not None:
-            candidates = [c for c in candidates if c != str(exclude_lead_id)]
-        active = await self.get_active_lead_ids(candidates)
+            candidates.discard(str(exclude_lead_id))
+        active = await self.get_active_lead_ids(list(candidates))
         return str(max(int(c) for c in active)) if active else None
 
     async def move_deal_to_junk(self, deal_id: str | int) -> dict[str, Any]:

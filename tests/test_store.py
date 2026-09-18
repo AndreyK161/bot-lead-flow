@@ -59,6 +59,22 @@ class StoreLinkingTests(unittest.TestCase):
         store.record_seen_lead({'ID':'1','PHONE':[{'VALUE':'+7 900 111-22-33'}]})
         self.assertIsNone(store.find_seen_lead_by_phones(['+7 900 999-88-77']))
 
+    def test_plus7_and_leading_8_are_treated_as_the_same_number(self):
+        store.record_seen_lead({'ID': '20462', 'PHONE': [{'VALUE': '+79241643860'}]})
+        self.assertEqual(store.find_all_seen_lead_ids_by_phones(['+89241643860']), ['20462'])
+        self.assertEqual(store.find_all_seen_lead_ids_by_phones(['89241643860']), ['20462'])
+        self.assertEqual(store.find_all_seen_lead_ids_by_phones(['+7 (924) 164-38-60']), ['20462'])
+        self.assertEqual(store.find_all_seen_lead_ids_by_phones(['9241643860']), ['20462'])
+
+    def test_find_all_seen_lead_ids_returns_every_match_not_just_latest(self):
+        store.record_seen_lead({'ID': '1', 'PHONE': [{'VALUE': '+79241643860'}]})
+        store.record_seen_lead({'ID': '2', 'PHONE': [{'VALUE': '89241643860'}]})
+        self.assertEqual(set(store.find_all_seen_lead_ids_by_phones(['9241643860'])), {'1', '2'})
+
+    def test_find_all_seen_lead_ids_empty_without_phones(self):
+        self.assertEqual(store.find_all_seen_lead_ids_by_phones([]), [])
+        self.assertEqual(store.find_all_seen_lead_ids_by_phones([None, '']), [])
+
 
 if __name__ == '__main__':
     unittest.main()
