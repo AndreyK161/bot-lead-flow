@@ -29,6 +29,7 @@ class ManualTests(unittest.IsolatedAsyncioTestCase):
         self.client.get_department_users.return_value = [{'ID': '7', 'NAME': 'Иван'}]
         self.client.get_user_name.return_value = 'Иван'
         self.client.get_source_name.return_value = 'Вконтакте'
+        self.client.find_active_duplicate_lead.return_value = None
         self.patches += [patch('app.manual.BitrixClient', return_value=self.client), patch('app.main.BitrixClient', return_value=self.client),
                          patch('app.manual.call', new=AsyncMock(return_value={'result': {'message_id': 10}})),
                          patch('app.manual.send_telegram_message', new=AsyncMock(return_value={'message_id': 99})),
@@ -198,6 +199,52 @@ class ManualTests(unittest.IsolatedAsyncioTestCase):
         await manual.handle(self.callback('confirm',row))
         self.assertEqual(store.submission(row['id'])['state'], 'submitted')
         self.assertNotIn('Отправлен на стадию',manual.card(store.submission(row['id']))[0])
+
+    async def _draft_with_phone(self, phone='+79991234567'):
+        await manual.handle(self.message(text=phone))
+        return store.rows('SELECT * FROM submissions')[0]
+
+    async def _select_source(self, row, uid=3):
+        cb = self.callback('select', row, uid)
+        cb['callback_query']['data'] += ':vk'
+        await manual.handle(cb)
+
+    async def test_duplicate_phone_blocks_creation_and_offers_force_create(self):
+        row = await self._draft_with_phone()
+        self.client.find_active_duplicate_lead.return_value = '999'
+        await self._select_source(row)
+        updated = store.submission(row['id'])
+        self.assertEqual(updated['state'], 'duplicate')
+        self.assertEqual(updated['duplicate_of'], '999')
+        self.client.add_lead.assert_not_awaited()
+        self.client.find_active_duplicate_lead.assert_awaited_once_with(['+79991234567'])
+        text, keyboard = manual.card(updated)
+        self.assertIn('№999', text)
+        self.assertIn('forcecreate:', keyboard['inline_keyboard'][0][0]['callback_data'])
+
+    async def test_forcecreate_creates_lead_despite_duplicate(self):
+        row = await self._draft_with_phone()
+        self.client.find_active_duplicate_lead.return_value = '999'
+        await self._select_source(row)
+        await manual.handle(self.callback('forcecreate', row, 4))
+        updated = store.submission(row['id'])
+        self.assertEqual(updated['state'], 'submitted')
+        self.client.add_lead.assert_awaited_once()
+        fields = self.client.add_lead.call_args.args[0]
+        self.assertEqual(fields['PHONE'][0]['VALUE'], '+79991234567')
+
+    async def test_cancel_works_from_duplicate_state(self):
+        row = await self._draft_with_phone()
+        self.client.find_active_duplicate_lead.return_value = '999'
+        await self._select_source(row)
+        await manual.handle(self.callback('cancel', row, 5))
+        self.assertEqual(store.submission(row['id'])['state'], 'cancelled')
+
+    async def test_no_duplicate_creates_lead_normally_with_phone(self):
+        row = await self._draft_with_phone()
+        await self._select_source(row)
+        self.assertEqual(store.submission(row['id'])['state'], 'submitted')
+        self.client.add_lead.assert_awaited_once()
 
 
 if __name__ == '__main__':

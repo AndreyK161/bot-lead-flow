@@ -55,6 +55,10 @@ def db():
         );
     ''')
     try:
+        conn.execute('ALTER TABLE submissions ADD COLUMN duplicate_of TEXT')
+    except sqlite3.OperationalError:
+        pass
+    try:
         with conn:
             yield conn
     finally:

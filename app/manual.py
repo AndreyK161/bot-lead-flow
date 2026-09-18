@@ -91,6 +91,11 @@ def card(row):
         text += '\n⏳ Создаём лид в Битриксе…'
     elif state == 'uncertain':
         text += '\n⚠️ Не удалось подтвердить создание. Проверяем Битрикс, повторно лид не создаётся.'
+    elif state == 'duplicate':
+        portal = urlparse(get_settings().bitrix_webhook_url).netloc
+        text += (f'\n\n⚠️ Уже есть активный лид с этим номером: '
+                 f'<a href="https://{escape(portal)}/crm/lead/details/{row["duplicate_of"]}/">№{escape(row["duplicate_of"])}</a>')
+        keyboard = [[button('Создать всё равно', f'forcecreate:{row["id"]}')], [button('✖️ Отменить передачу', f'cancel:{row["id"]}')]]
     elif state == 'cancelled':
         text += '\n✖️ Передача отменена'
     elif state == 'deleted':
@@ -159,6 +164,26 @@ async def publish(row):
             store.save(row['id'], main_message_id=result['message_id'])
 
 
+async def _create_lead(row, source_id, source_name, user_id, phone):
+    fields = {'TITLE': f'Лид {source_name}', 'SOURCE_ID': source_id,
+              'SOURCE_DESCRIPTION': MARKER + row['id'], 'COMMENTS': f'Контакт: {row["contact"]}\nДобавлено вручную (Telegram ID {user_id})'}
+    if phone:
+        fields['PHONE'] = [{'VALUE': phone, 'VALUE_TYPE': 'WORK'}]
+    try:
+        lead_id = await BitrixClient().add_lead(fields)
+    except BitrixApiError:
+        store.save(row['id'], state='draft', dirty=1)
+        await sync(store.submission(row['id']))
+        await send(row['chat_id'], 'Битрикс отклонил создание лида. Попробуйте снова или отмените передачу.')
+        return
+    except (httpx.TimeoutException, httpx.TransportError, httpx.HTTPStatusError):
+        store.save(row['id'], state='uncertain', dirty=1)
+        await sync(store.submission(row['id']))
+        return
+    store.save(row['id'], state='submitted', lead_id=lead_id, dirty=1)
+    await publish(store.submission(row['id']))
+
+
 async def recover():
     async with lock:
         for row in store.rows("SELECT * FROM submissions WHERE state IN ('creating','uncertain')"):
@@ -219,7 +244,7 @@ async def handle(update):
             row = store.submission(parts[1])
             if not row or row['chat_id'] != chat_id or row['message_id'] != message['message_id']:
                 return
-            if action == 'cancel' and row['state'] == 'draft':
+            if action == 'cancel' and row['state'] in ('draft', 'duplicate'):
                 store.save(row['id'], state='cancelled', dirty=1)
             elif action == 'select' and row['state'] == 'draft' and len(parts) == 3:
                 sources = store.rows('SELECT * FROM sources WHERE id=? AND enabled=1', (parts[2],))
@@ -227,24 +252,23 @@ async def handle(update):
                     await send(chat_id, 'Источник отключён. Выберите другой источник.')
                     return
                 source = sources[0]
+                phone = re.sub(r'[^\d+]', '', row['contact']) if re.fullmatch(r'\+?[\d\s()\-]{7,25}', row['contact']) else None
+                duplicate_of = None
+                if phone:
+                    try:
+                        duplicate_of = await BitrixClient().find_active_duplicate_lead([phone])
+                    except BitrixApiError:
+                        logger.exception('Duplicate check failed for submission %s', row['id'])
+                if duplicate_of:
+                    store.save(row['id'], state='duplicate', source_id=source['id'], source_name=source['name'], duplicate_of=duplicate_of, dirty=1)
+                    await sync(store.submission(row['id']))
+                    return
                 store.save(row['id'], state='creating', source_id=source['id'], source_name=source['name'], dirty=1)
-                fields = {'TITLE': f'Лид {source["name"]}', 'SOURCE_ID': source['id'],
-                          'SOURCE_DESCRIPTION': MARKER + row['id'], 'COMMENTS': f'Контакт: {row["contact"]}\nДобавлено вручную (Telegram ID {user["id"]})'}
-                if re.fullmatch(r'\+?[\d\s()\-]{7,25}', row['contact']):
-                    fields['PHONE'] = [{'VALUE': re.sub(r'[^\d+]', '', row['contact']), 'VALUE_TYPE': 'WORK'}]
-                try:
-                    lead_id = await BitrixClient().add_lead(fields)
-                except BitrixApiError:
-                    store.save(row['id'], state='draft', dirty=1)
-                    await sync(store.submission(row['id']))
-                    await send(chat_id, 'Битрикс отклонил создание лида. Попробуйте снова или отмените передачу.')
-                    return
-                except (httpx.TimeoutException, httpx.TransportError, httpx.HTTPStatusError):
-                    store.save(row['id'], state='uncertain', dirty=1)
-                    await sync(store.submission(row['id']))
-                    return
-                store.save(row['id'], state='submitted', lead_id=lead_id, dirty=1)
-                await publish(store.submission(row['id']))
+                await _create_lead(store.submission(row['id']), source['id'], source['name'], user['id'], phone)
+            elif action == 'forcecreate' and row['state'] == 'duplicate':
+                phone = re.sub(r'[^\d+]', '', row['contact']) if re.fullmatch(r'\+?[\d\s()\-]{7,25}', row['contact']) else None
+                store.save(row['id'], state='creating', duplicate_of=None, dirty=1)
+                await _create_lead(store.submission(row['id']), row['source_id'], row['source_name'], user['id'], phone)
             elif action == 'delete' and row['state'] == 'submitted':
                 text, _ = card(row)
                 await edit(chat_id, row['message_id'], text + '\n\nПеренести этот лид на стадию «Мусор»?', {'inline_keyboard': [[button('Да, в мусор', f'confirm:{row["id"]}')], [button('Оставить лид', f'keep:{row["id"]}')]]})

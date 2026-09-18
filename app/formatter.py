@@ -34,11 +34,17 @@ def build_lead_notification(
     source_name: str | None = None,
     assigned_name: str | None = None,
     is_junk: bool = False,
+    duplicate_of_lead_id: str | None = None,
 ) -> str:
     """Собирает HTML-сообщение для sendMessage(parse_mode=HTML)."""
 
     lead_id = lead.get("ID", "")
-    lines: list[str] = ["🗑 <b>Отправлен на стадию «Мусор»</b>" if is_junk else "🆕 <b>Новый лид</b>"]
+    if duplicate_of_lead_id:
+        lines: list[str] = ["⚠️ <b>Новый лид — Дубликат</b>"]
+    elif is_junk:
+        lines = ["🗑 <b>Отправлен на стадию «Мусор»</b>"]
+    else:
+        lines = ["🆕 <b>Новый лид</b>"]
 
     full_name = _build_full_name(lead)
     if full_name:
@@ -79,6 +85,14 @@ def build_lead_notification(
 
     if assigned_name:
         lines.append(f"👔 Ответственный: {escape(assigned_name)}")
+
+    if duplicate_of_lead_id:
+        if portal_domain:
+            dup_url = CRM_LEAD_URL_TEMPLATE.format(portal=portal_domain, lead_id=duplicate_of_lead_id)
+            lines.append(f'🔁 Совпадает по телефону с лидом <a href="{escape(dup_url)}">№{escape(str(duplicate_of_lead_id))}</a>')
+        else:
+            lines.append(f"🔁 Совпадает по телефону с лидом №{escape(str(duplicate_of_lead_id))}")
+        lines.append("🗑 Автоматически перенесён в «Мусор» как дубликат")
 
     if portal_domain and lead_id:
         crm_url = CRM_LEAD_URL_TEMPLATE.format(portal=portal_domain, lead_id=lead_id)

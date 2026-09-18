@@ -120,15 +120,27 @@ async def bitrix_webhook(request: Request) -> dict[str, str]:
         assigned_name = None
         if lead.get("ASSIGNED_BY_ID"):
             assigned_name = await client.get_user_name(lead["ASSIGNED_BY_ID"])
+
+        duplicate_of_lead_id = None
+        phones = [(item or {}).get("VALUE") for item in (lead.get("PHONE") or [])]
+        if phones:
+            duplicate_of_lead_id = await client.find_active_duplicate_lead(phones, exclude_lead_id=lead_id)
     except BitrixApiError:
         logger.exception("Bitrix API call failed for lead_id=%s", lead_id)
         raise HTTPException(status_code=status.HTTP_502_BAD_GATEWAY, detail="Bitrix API error")
+
+    if duplicate_of_lead_id:
+        try:
+            lead = await client.move_to_junk(lead_id)
+        except BitrixApiError:
+            logger.exception("Failed to auto-junk duplicate lead_id=%s", lead_id)
 
     message = build_lead_notification(
         lead,
         portal_domain=_portal_domain(settings.bitrix_webhook_url),
         source_name=source_name,
         assigned_name=assigned_name,
+        duplicate_of_lead_id=duplicate_of_lead_id,
     )
 
     # Каждому руководителю в личку — уведомление с кнопками управления. Общего чата нет.

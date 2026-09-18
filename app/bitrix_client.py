@@ -132,6 +132,35 @@ class BitrixClient:
     async def update_deal(self, deal_id: str | int, fields: dict[str, Any]) -> None:
         await self._call("crm.deal.update", {"id": deal_id, "fields": fields})
 
+    async def find_duplicate_lead_ids(self, phones: list[str]) -> list[str]:
+        """Использует встроенный поиск дублей Bitrix (crm.duplicate.findbycomm) по телефону."""
+        values = [str(p) for p in phones if p]
+        if not values:
+            return []
+        result = await self._call(
+            "crm.duplicate.findbycomm",
+            {"entity_type": "LEAD", "type": "PHONE", "values": values},
+        )
+        return [str(x) for x in (result or {}).get("LEAD", [])]
+
+    async def get_active_lead_ids(self, lead_ids: list[str]) -> list[str]:
+        """Из списка ID лидов оставляет только те, что ещё в работе (не мусор/не конвертированы)."""
+        if not lead_ids:
+            return []
+        result = await self._call(
+            "crm.lead.list",
+            {"filter": {"ID": lead_ids}, "select": ["ID", "STATUS_SEMANTIC_ID"]},
+        )
+        return [str(item["ID"]) for item in result if item.get("STATUS_SEMANTIC_ID") == "P"]
+
+    async def find_active_duplicate_lead(self, phones: list[str], *, exclude_lead_id: str | int | None = None) -> str | None:
+        """Ищет активный лид с тем же телефоном (кроме исключённого) — самый свежий по ID."""
+        candidates = await self.find_duplicate_lead_ids(phones)
+        if exclude_lead_id is not None:
+            candidates = [c for c in candidates if c != str(exclude_lead_id)]
+        active = await self.get_active_lead_ids(candidates)
+        return str(max(int(c) for c in active)) if active else None
+
     async def move_deal_to_junk(self, deal_id: str | int) -> dict[str, Any]:
         deal = await self.get_deal(deal_id)
         category_id = str(deal.get("CATEGORY_ID", "0"))
