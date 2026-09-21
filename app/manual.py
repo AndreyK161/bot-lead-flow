@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 import httpx
 
-from app import store
+from app import stats, store
 from app.bitrix_client import BitrixApiError, BitrixClient
 from app.config import get_settings
 from app.formatter import build_lead_notification, build_manage_keyboard
@@ -161,7 +161,7 @@ def destinations():
 
 def deliveries(row):
     if row["main_message_id"]:
-        store.execute("INSERT OR IGNORE INTO deliveries VALUES (?,?,?)",
+        store.execute("INSERT INTO deliveries VALUES (?,?,?) ON CONFLICT DO NOTHING",
                       (row["id"], str(get_settings().telegram_chat_id), row["main_message_id"]))
     return store.rows("SELECT * FROM deliveries WHERE submission_id=?", (row["id"],))
 
@@ -176,13 +176,14 @@ async def publish(row):
     client = BitrixClient()
     lead = await client.get_lead(row["lead_id"])
     store.record_seen_lead(lead)
+    stats.record("lead", lead, source_name=row["source_name"], assignee_name=row["manager"])
     text = build_lead_notification(
         lead, portal_domain=urlparse(get_settings().bitrix_webhook_url).netloc,
         source_name=row["source_name"], assigned_name=row["manager"],
     )
     for chat_id in pending:
         result = await send_telegram_message(text, reply_markup=build_manage_keyboard(row["lead_id"]), chat_id=chat_id)
-        store.execute("INSERT OR IGNORE INTO deliveries VALUES (?,?,?)", (row["id"], chat_id, result["message_id"]))
+        store.execute("INSERT INTO deliveries VALUES (?,?,?) ON CONFLICT DO NOTHING", (row["id"], chat_id, result["message_id"]))
         if chat_id == str(get_settings().telegram_chat_id):
             store.save(row["id"], main_message_id=result["message_id"])
 
@@ -267,7 +268,7 @@ async def recovery_loop():
 
 def _active(chat_id):
     result = store.rows(
-        "SELECT * FROM submissions WHERE chat_id=? AND state IN ('draft','manager','comment','duplicate','creating','uncertain') ORDER BY rowid DESC LIMIT 1",
+        "SELECT * FROM submissions WHERE chat_id=? AND state IN ('draft','manager','comment','duplicate','creating','uncertain') ORDER BY created_at DESC LIMIT 1",
         (chat_id,),
     )
     return result[0] if result else None
@@ -312,7 +313,7 @@ async def handle_main_message(message, update_id) -> bool:
         phone = re.sub(r"[^\d+]", "", text)
         await refresh_sources()
         identifier = uuid.uuid4().hex[:12]
-        store.execute("INSERT OR IGNORE INTO submissions (id,update_id,chat_id,contact,bot_kind) VALUES (?,?,?,?,?)",
+        store.execute("INSERT INTO submissions (id,update_id,chat_id,contact,bot_kind) VALUES (?,?,?,?,?) ON CONFLICT DO NOTHING",
                       (identifier, update_id, chat_id, phone, "main"))
         await sync(store.submission(identifier))
         return True
@@ -338,7 +339,7 @@ async def handle_main_callback(callback_query, update_id) -> bool:
             return True
         if action == "mt":
             with store.db() as conn:
-                inserted = conn.execute("INSERT OR IGNORE INTO source_updates VALUES (?)", (update_id,)).rowcount
+                inserted = conn.execute("INSERT INTO source_updates VALUES (?) ON CONFLICT DO NOTHING", (update_id,)).rowcount
                 if inserted:
                     conn.execute("UPDATE sources SET enabled=1-enabled WHERE id=?", (parts[1],))
             await source_menu(chat_id, message_id, int(parts[2]))
@@ -375,7 +376,8 @@ async def handle_main_callback(callback_query, update_id) -> bool:
             })
             return True
         elif action == "mconfirm" and row["state"] == "submitted":
-            await BitrixClient().move_to_junk(row["lead_id"])
+            lead = await BitrixClient().move_to_junk(row["lead_id"])
+            stats.record("lead", lead, source_name=row["source_name"], assignee_name=row["manager"])
             store.save(row["id"], state="junk", dirty=1)
         await sync(store.submission(row["id"]))
         return True

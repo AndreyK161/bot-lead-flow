@@ -14,6 +14,10 @@ class Settings(BaseSettings):
     # Токен исходящего вебхука ONCRMLEADADD — сверяется, чтобы принимать запросы только от Битрикса
     bitrix_application_token: str
 
+    @property
+    def bitrix_application_token_set(self) -> set[str]:
+        return {value.strip() for value in self.bitrix_application_token.split(",") if value.strip()}
+
     telegram_bot_token: str
     telegram_chat_id: str
     telegram_notification_chat_ids: str = ""
@@ -43,9 +47,15 @@ class Settings(BaseSettings):
     # Отдел в Bitrix, из которого предлагать список ответственных при назначении
     sales_department_id: str
 
+    # PostgreSQL используется в production; SQLite остаётся fallback для тестов/локальной разработки.
+    database_url: str = ""
     database_path: str = "data/leads.sqlite3"
     track_deal_category_id: str = "0"
     deal_poll_interval_seconds: int = 15
+    lead_unprocessed_status_id: str = "NEW"
+    deal_unprocessed_stage_id: str = "NEW"
+    daily_stats_time: str = "19:00"
+    daily_stats_timezone: str = "Europe/Moscow"
 
 
 @lru_cache

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
-from app import reports, store
+from app import reports, stats, store
 from app.formatter import build_daily_report_body
 
 
@@ -115,6 +115,26 @@ class SendDailyReportsTests(unittest.IsolatedAsyncioTestCase):
         await reports.send_daily_reports()
         self.send_message.assert_not_awaited()
 
+    async def test_sales_deal_without_leads_is_in_director_summary(self):
+        stats.record(
+            'deal',
+            {'ID': '20', 'CATEGORY_ID': '0', 'STAGE_ID': 'NEW', 'ASSIGNED_BY_ID': '460', 'SOURCE_ID': 'TG'},
+            source_name='Телеграм', assignee_name='Никита Продажников',
+        )
+        self.client.get_leads_created_between.return_value = []
+        await reports.send_daily_reports()
+        self.assertEqual({call.kwargs['chat_id'] for call in self.send_message.call_args_list}, {100, 101})
+        self.assertIn('сделки: 1', self.send_message.call_args_list[0].args[0])
+
+    async def test_successful_report_is_not_sent_twice(self):
+        self.client.get_leads_created_between.return_value = [
+            {'ID': '1', 'SOURCE_ID': 'TG', 'STATUS_ID': 'JUNK', 'ASSIGNED_BY_ID': '460'},
+        ]
+        await reports.send_daily_reports()
+        first_count = self.send_message.await_count
+        await reports.send_daily_reports()
+        self.assertEqual(self.send_message.await_count, first_count)
+
     async def test_linked_manager_gets_personal_report(self):
         store.link_manager('460', 'Никита Продажников', 555)
         self.client.get_leads_created_between.return_value = [
@@ -126,6 +146,30 @@ class SendDailyReportsTests(unittest.IsolatedAsyncioTestCase):
         personal = next(call for call in self.send_message.call_args_list if call.kwargs['chat_id'] == 555)
         self.assertIn('Отчёт за', personal.args[0])
         self.assertIn('№1</a>', personal.args[0])
+
+    async def test_transfer_after_processing_keeps_report_with_original_manager(self):
+        store.link_manager('460', 'Первый менеджер', 555)
+        stats.record(
+            'lead',
+            {'ID': '1', 'STATUS_ID': 'NEW', 'ASSIGNED_BY_ID': '460', 'SOURCE_ID': 'TG'},
+            source_name='Телеграм', assignee_name='Первый менеджер',
+        )
+        stats.record(
+            'lead',
+            {'ID': '1', 'STATUS_ID': 'IN_PROCESS', 'ASSIGNED_BY_ID': '460', 'SOURCE_ID': 'TG'},
+            source_name='Телеграм', assignee_name='Первый менеджер',
+        )
+        stats.record(
+            'lead',
+            {'ID': '1', 'STATUS_ID': 'IN_PROCESS', 'ASSIGNED_BY_ID': '999', 'SOURCE_ID': 'TG'},
+            source_name='Телеграм', assignee_name='Новый менеджер',
+        )
+        self.client.get_leads_created_between.return_value = [
+            {'ID': '1', 'SOURCE_ID': 'TG', 'STATUS_ID': 'IN_PROCESS', 'ASSIGNED_BY_ID': '999'},
+        ]
+        await reports.send_daily_reports()
+        chat_ids = [call.kwargs['chat_id'] for call in self.send_message.call_args_list]
+        self.assertIn(555, chat_ids)
 
     async def test_unlinked_manager_gets_no_personal_dm_but_appears_in_digest(self):
         self.client.get_leads_created_between.return_value = [

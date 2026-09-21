@@ -9,7 +9,7 @@ from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request, status
 
-from app import deals, manual, reports, store
+from app import deals, manual, reports, stats, store
 from app.bitrix_client import BitrixApiError, BitrixClient
 from app.config import get_settings
 from app.formatter import (
@@ -68,19 +68,20 @@ async def bitrix_webhook(request: Request) -> dict[str, str]:
     form = await request.form()
 
     application_token = form.get("auth[application_token]")
-    if application_token != settings.bitrix_application_token:
+    allowed_tokens = getattr(settings, "bitrix_application_token_set", {settings.bitrix_application_token})
+    if application_token not in allowed_tokens:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid application token")
 
     event = form.get("event")
-    if event == "ONCRMDEALADD":
+    if event in {"ONCRMDEALADD", "ONCRMDEALUPDATE"}:
         deal_id = form.get("data[FIELDS][ID]")
         if not deal_id:
             raise HTTPException(status_code=400, detail="Missing deal id")
         async with deals.lock:
-            tracked = await deals.track(deal_id)
+            tracked = await (deals.track(deal_id) if event == "ONCRMDEALADD" else deals.observe_update(deal_id))
         return {"status": "ok" if tracked else "ignored"}
 
-    if event != "ONCRMLEADADD":
+    if event not in {"ONCRMLEADADD", "ONCRMLEADUPDATE"}:
         # Не наш эндпоинт настроен на другое событие — просто игнорируем.
         return {"status": "ignored"}
 
@@ -93,6 +94,10 @@ async def bitrix_webhook(request: Request) -> dict[str, str]:
     try:
         lead = await client.get_lead(lead_id)
         store.record_seen_lead(lead)
+        await stats.observe("lead", lead, client)
+
+        if event == "ONCRMLEADUPDATE":
+            return {"status": "ok"}
 
         # "Ручной" бот публикует уведомление сам после создания лида — здесь его дублировать не надо.
         if str(lead.get("SOURCE_DESCRIPTION", "")).startswith(manual.MARKER):
@@ -121,6 +126,7 @@ async def bitrix_webhook(request: Request) -> dict[str, str]:
     if duplicate_of_lead_id:
         try:
             lead = await client.move_to_duplicate_stage(lead_id)
+            await stats.observe("lead", lead, client)
         except BitrixApiError:
             logger.exception("Failed to auto-move duplicate lead_id=%s to «Дубль»", lead_id)
 
@@ -312,6 +318,7 @@ async def _handle_callback(callback_query: dict, settings, update_id: int) -> No
                 if row:
                     store.save(row["id"], manager=assigned_name or user_id, dirty=1)
                 lead = await client.get_lead(lead_id)
+                await stats.observe("lead", lead, client)
                 source_name = await client.get_source_name(lead.get("SOURCE_ID", ""))
                 new_text = build_lead_notification(
                     lead, portal_domain=_portal_domain(settings.bitrix_webhook_url),
@@ -328,6 +335,7 @@ async def _handle_callback(callback_query: dict, settings, update_id: int) -> No
             client = BitrixClient()
             async with manual.lock:
                 lead = await client.move_to_junk(lead_id)
+                await stats.observe("lead", lead, client)
                 row = store.by_lead(lead_id)
                 if row:
                     store.save(row["id"], state="junk", dirty=1)

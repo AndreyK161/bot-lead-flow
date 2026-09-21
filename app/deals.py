@@ -5,7 +5,7 @@ import asyncio
 import logging
 from urllib.parse import urlparse
 
-from app import store
+from app import stats, store
 from app.bitrix_client import BitrixClient
 from app.config import get_settings
 from app.formatter import build_deal_manage_keyboard, build_deal_notification
@@ -46,22 +46,25 @@ async def render(deal: dict, *, is_junk: bool = False) -> str:
 
 
 async def publish(deal_id: str) -> None:
+    client = BitrixClient()
+    deal = await client.get_deal(deal_id)
+    await stats.observe("deal", deal, client)
     delivered = {row["chat_id"] for row in deliveries(deal_id)}
     pending = [chat_id for chat_id in destinations() if chat_id not in delivered]
     if not pending:
         store.execute("UPDATE deal_notifications SET dirty=0 WHERE deal_id=?", (deal_id,))
         return
-    deal = await BitrixClient().get_deal(deal_id)
     text = await render(deal)
     for chat_id in pending:
         message = await send_telegram_message(
             text, reply_markup=build_deal_manage_keyboard(deal_id), chat_id=chat_id,
         )
-        store.execute("INSERT OR IGNORE INTO deal_deliveries VALUES (?,?,?)", (deal_id, chat_id, message["message_id"]))
+        store.execute("INSERT INTO deal_deliveries VALUES (?,?,?) ON CONFLICT DO NOTHING", (deal_id, chat_id, message["message_id"]))
     store.execute("UPDATE deal_notifications SET dirty=0 WHERE deal_id=?", (deal_id,))
 
 
 async def refresh_cards(deal: dict, *, is_junk: bool = False) -> None:
+    await stats.observe("deal", deal, BitrixClient())
     text = await render(deal, is_junk=is_junk)
     for delivery in deliveries(str(deal["ID"])):
         await edit_message_text(
@@ -85,8 +88,18 @@ async def track(deal_id: str | int) -> bool:
     deal = await client.get_deal(deal_id)
     if str(deal.get("CATEGORY_ID")) != get_settings().track_deal_category_id:
         return False
-    store.execute("INSERT OR IGNORE INTO deal_notifications (deal_id) VALUES (?)", (deal_id,))
+    store.execute("INSERT INTO deal_notifications (deal_id) VALUES (?) ON CONFLICT DO NOTHING", (deal_id,))
     await publish(deal_id)
+    return True
+
+
+async def observe_update(deal_id: str | int) -> bool:
+    """Refresh analytics from Bitrix without sending a new-deal notification."""
+    client = BitrixClient()
+    deal = await client.get_deal(deal_id)
+    if str(deal.get("CATEGORY_ID")) != get_settings().track_deal_category_id:
+        return False
+    await stats.observe("deal", deal, client)
     return True
 
 
@@ -95,7 +108,10 @@ async def _ensure_cursor() -> int:
     if existing:
         return int(existing[0]["value"])
     latest = int(await BitrixClient().get_latest_deal_id(get_settings().track_deal_category_id))
-    store.execute("INSERT OR REPLACE INTO metadata VALUES (?,?)", (CURSOR_KEY, str(latest)))
+    store.execute(
+        "INSERT INTO metadata VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+        (CURSOR_KEY, str(latest)),
+    )
     logger.info("Initialized sales deal cursor at %s", latest)
     return latest
 
@@ -111,8 +127,11 @@ async def poll_once() -> None:
         deals = await BitrixClient().get_new_deals(get_settings().track_deal_category_id, cursor)
         for deal in deals:
             deal_id = str(deal["ID"])
-            store.execute("INSERT OR IGNORE INTO deal_notifications (deal_id) VALUES (?)", (deal_id,))
-            store.execute("INSERT OR REPLACE INTO metadata VALUES (?,?)", (CURSOR_KEY, deal_id))
+            store.execute("INSERT INTO deal_notifications (deal_id) VALUES (?) ON CONFLICT DO NOTHING", (deal_id,))
+            store.execute(
+                "INSERT INTO metadata VALUES (?,?) ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (CURSOR_KEY, deal_id),
+            )
             try:
                 await publish(deal_id)
             except Exception:

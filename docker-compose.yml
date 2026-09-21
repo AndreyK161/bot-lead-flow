@@ -1,9 +1,32 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: bot_lead_flow
+      POSTGRES_USER: bot_lead_flow
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U bot_lead_flow -d bot_lead_flow"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
   bot-lead-flow:
     build: .
     restart: unless-stopped
     env_file: .env
+    environment:
+      DATABASE_URL: postgresql://bot_lead_flow:${POSTGRES_PASSWORD}@postgres:5432/bot_lead_flow
+    depends_on:
+      postgres:
+        condition: service_healthy
     volumes:
       - ./data:/app/data
     ports:
       - "127.0.0.1:8080:8000"
+
+volumes:
+  postgres_data:

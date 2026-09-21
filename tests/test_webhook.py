@@ -88,6 +88,21 @@ class BitrixWebhookTests(WebhookTestCase):
         self.assertEqual(result, {'status': 'ok'})
         track.assert_awaited_once_with('19406')
 
+    async def test_routes_deal_update_to_statistics_without_new_notification(self):
+        request = form_request(**{'auth[application_token]': 'apptoken', 'event': 'ONCRMDEALUPDATE', 'data[FIELDS][ID]': '19406'})
+        with patch('app.main.deals.observe_update', new=AsyncMock(return_value=True)) as observe:
+            result = await main.bitrix_webhook(request)
+        self.assertEqual(result, {'status': 'ok'})
+        observe.assert_awaited_once_with('19406')
+
+    async def test_lead_update_refreshes_statistics_without_notification(self):
+        request = form_request(**{'auth[application_token]': 'apptoken', 'event': 'ONCRMLEADUPDATE', 'data[FIELDS][ID]': '20312'})
+        with patch('app.main.stats.observe', new=AsyncMock()) as observe:
+            result = await main.bitrix_webhook(request)
+        self.assertEqual(result, {'status': 'ok'})
+        observe.assert_awaited_once_with('lead', self.client.get_lead.return_value, self.client)
+        self.send_message.assert_not_awaited()
+
     async def test_sends_dm_to_every_director(self):
         self.settings.director_user_id_set = {100, 101}
         request = form_request(**{'auth[application_token]': 'apptoken', 'event': 'ONCRMLEADADD', 'data[FIELDS][ID]': '20312'})
