@@ -94,6 +94,7 @@ class SendDailyReportsTests(unittest.IsolatedAsyncioTestCase):
         self.client = AsyncMock()
         self.client.get_sources.return_value = [{'STATUS_ID': 'TG', 'NAME': 'Телеграм'}]
         self.client.get_lead_statuses.return_value = [{'STATUS_ID': 'JUNK', 'NAME': 'Мусор'}]
+        self.client.get_deal_stages.return_value = [{'STATUS_ID': 'NEW', 'NAME': 'Не обработан'}]
         self.client.get_user_name.return_value = 'Никита Продажников'
         self.client.get_department_users.return_value = [{'ID': '460'}, {'ID': '999'}]
         self.bitrix_patch = patch('app.reports.BitrixClient', return_value=self.client)
@@ -228,11 +229,14 @@ class SendDailyReportsTests(unittest.IsolatedAsyncioTestCase):
 
 
 class TodayBoundsTests(unittest.TestCase):
-    def test_bounds_span_exactly_one_moscow_day(self):
+    def test_bounds_span_between_report_cutoffs(self):
         now = datetime(2026, 9, 18, 21, 30, tzinfo=reports.MOSCOW_TZ)
-        start, end = reports._today_bounds_moscow(now)
-        self.assertTrue(start.startswith('2026-09-18T00:00:00'))
-        self.assertTrue(end.startswith('2026-09-19T00:00:00'))
+        with patch('app.stats.get_settings', return_value=SimpleNamespace(
+            daily_stats_time='19:00', daily_stats_timezone='Europe/Moscow',
+        )):
+            start, end = reports._report_bounds(now)
+        self.assertTrue(start.startswith('2026-09-17T19:00:00'))
+        self.assertTrue(end.startswith('2026-09-18T19:00:00'))
 
 
 if __name__ == '__main__':

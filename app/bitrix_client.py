@@ -120,6 +120,10 @@ class BitrixClient:
     async def get_lead_statuses(self) -> list[dict[str, Any]]:
         return await self._call("crm.status.list", {"filter": {"ENTITY_ID": "STATUS"}})
 
+    async def get_deal_stages(self, category_id: str = "0") -> list[dict[str, Any]]:
+        entity_id = "DEAL_STAGE" if str(category_id) == "0" else f"DEAL_STAGE_{category_id}"
+        return await self._call("crm.status.list", {"filter": {"ENTITY_ID": entity_id}})
+
     async def get_leads_created_between(self, start_iso: str, end_iso: str) -> list[dict[str, Any]]:
         return await self._call("crm.lead.list", {
             "filter": {">=DATE_CREATE": start_iso, "<DATE_CREATE": end_iso},

@@ -37,10 +37,18 @@ def _created_date(raw: object, now: datetime | None = None) -> str:
     return (now or datetime.now(timezone)).astimezone(timezone).date().isoformat()
 
 
-def _event(entity_type: str, entity_id: str, event_type: str, old_value, new_value) -> None:
+def _event(
+    entity_type: str,
+    entity_id: str,
+    event_type: str,
+    old_value,
+    new_value,
+    occurred_at: str,
+) -> None:
     store.execute(
-        "INSERT INTO crm_item_events (entity_type,entity_id,event_type,old_value,new_value) VALUES (?,?,?,?,?)",
-        (entity_type, entity_id, event_type, old_value, new_value),
+        "INSERT INTO crm_item_events "
+        "(entity_type,entity_id,event_type,old_value,new_value,occurred_at) VALUES (?,?,?,?,?,?)",
+        (entity_type, entity_id, event_type, old_value, new_value, occurred_at),
     )
 
 
@@ -88,13 +96,21 @@ def record(
             if existing["current_assignee_id"] == assignee_id else assignee_name
         )
         if existing["current_stage_id"] != stage_id:
-            _event(entity_type, entity_id, "stage_changed", existing["current_stage_id"], stage_id)
+            _event(
+                entity_type, entity_id, "stage_changed",
+                existing["current_stage_id"], stage_id, timestamp,
+            )
         if existing["current_assignee_id"] != assignee_id:
-            _event(entity_type, entity_id, "assignee_changed", existing["current_assignee_id"], assignee_id)
+            event_type = "transferred" if existing["processed_at"] else "assignee_changed"
+            _event(
+                entity_type, entity_id, event_type,
+                existing["current_assignee_id"], assignee_id, timestamp,
+            )
         store.execute(
             """UPDATE crm_items SET source_id=?,source_name=?,current_stage_id=?,
                current_assignee_id=?,current_assignee_name=?,processed_at=?,processed_by_id=?,
-               processed_by_name=?,updated_at=? WHERE entity_type=? AND entity_id=?""",
+               processed_by_name=?,updated_at=?
+               WHERE entity_type=? AND entity_id=?""",
             (source_id, resolved_source_name, stage_id, assignee_id, resolved_assignee_name,
              processed_at, processed_by_id, processed_by_name, timestamp, entity_type, entity_id),
         )
@@ -102,12 +118,14 @@ def record(
         store.execute(
             """INSERT INTO crm_items
                (entity_type,entity_id,source_id,source_name,created_date,current_stage_id,
-                current_assignee_id,current_assignee_name,processed_at,processed_by_id,processed_by_name,updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?)""",
+                current_assignee_id,current_assignee_name,processed_at,processed_by_id,
+                processed_by_name,first_seen_at,updated_at)
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (entity_type, entity_id, source_id, source_name, _created_date(item.get("DATE_CREATE"), now),
-             stage_id, assignee_id, assignee_name, processed_at, processed_by_id, processed_by_name, timestamp),
+             stage_id, assignee_id, assignee_name, processed_at, processed_by_id,
+             processed_by_name, timestamp, timestamp),
         )
-        _event(entity_type, entity_id, "created", None, stage_id)
+        _event(entity_type, entity_id, "created", None, stage_id, timestamp)
     return store.rows(
         "SELECT * FROM crm_items WHERE entity_type=? AND entity_id=?", (entity_type, entity_id)
     )[0]
@@ -134,32 +152,178 @@ async def observe(entity_type: str, item: dict, client: BitrixClient | None = No
     return record(entity_type, item, source_name=source_name, assignee_name=assignee_name)
 
 
-def build_daily_report(report_date: date | str) -> str:
+def report_bounds(report_date: date | str) -> tuple[datetime, datetime]:
+    """Fixed interval ending at the configured report time on report_date."""
+    day = report_date if isinstance(report_date, date) else date.fromisoformat(report_date)
+    timezone = ZoneInfo(_setting("daily_stats_timezone", "Europe/Moscow"))
+    hour, minute = map(int, _setting("daily_stats_time", "19:00").split(":"))
+    end = datetime.combine(day, time(hour, minute), timezone)
+    return end - timedelta(days=1), end
+
+
+def _as_datetime(value: object) -> datetime | None:
+    if not value:
+        return None
+    if isinstance(value, datetime):
+        parsed = value
+    else:
+        try:
+            parsed = datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        except ValueError:
+            return None
+    timezone = ZoneInfo(_setting("daily_stats_timezone", "Europe/Moscow"))
+    if parsed.tzinfo is None:
+        parsed = parsed.replace(tzinfo=timezone)
+    return parsed.astimezone(timezone)
+
+
+def _in_window(value: object, start: datetime, end: datetime) -> bool:
+    parsed = _as_datetime(value)
+    return bool(parsed and start <= parsed < end)
+
+
+def interval_data(report_date: date | str) -> dict[str, object]:
+    start, end = report_bounds(report_date)
+    rows = store.rows("SELECT * FROM crm_items")
+    events = store.rows("SELECT * FROM crm_item_events ORDER BY occurred_at,id")
+    histories: dict[tuple[str, str], list[dict]] = {}
+    for event in events:
+        if _as_datetime(event["occurred_at"]):
+            histories.setdefault((event["entity_type"], event["entity_id"]), []).append(event)
+
+    snapshots = []
+    for row in rows:
+        history = histories.get((row["entity_type"], row["entity_id"]), [])
+        report_stage_id = row["current_stage_id"]
+        report_assignee_id = row["current_assignee_id"]
+        # Rewind changes that happened at or after the cutoff. This keeps recovery
+        # reports historically correct even if the CRM object has since moved on.
+        for event in reversed(history):
+            occurred_at = _as_datetime(event["occurred_at"])
+            if not occurred_at or occurred_at < end:
+                continue
+            if event["event_type"] == "stage_changed":
+                report_stage_id = event["old_value"]
+            elif event["event_type"] in {"assignee_changed", "transferred"}:
+                report_assignee_id = event["old_value"]
+        snapshots.append({
+            **row,
+            "report_stage_id": report_stage_id,
+            "report_assignee_id": report_assignee_id,
+            "report_processed": bool(
+                _as_datetime(row["processed_at"]) and _as_datetime(row["processed_at"]) < end
+            ),
+            "report_assignee_name": (
+                row["current_assignee_name"]
+                if str(row["current_assignee_id"] or "") == str(report_assignee_id or "") else None
+            ),
+        })
+    qualified = [row for row in snapshots if _in_window(row["processed_at"], start, end)]
+    new = [row for row in snapshots if _in_window(row["first_seen_at"], start, end)]
+    rows_by_key = {(row["entity_type"], row["entity_id"]): row for row in rows}
+
+    def is_transfer(event: dict) -> bool:
+        if event["event_type"] == "transferred":
+            return True
+        if event["event_type"] != "assignee_changed":
+            return False
+        row = rows_by_key.get((event["entity_type"], event["entity_id"]))
+        processed_at = _as_datetime(row["processed_at"]) if row else None
+        occurred_at = _as_datetime(event["occurred_at"])
+        # Compatibility with events recorded before the dedicated
+        # "transferred" type existed. Strict comparison avoids treating the
+        # assignee selected during qualification itself as a later transfer.
+        return bool(processed_at and occurred_at and processed_at < occurred_at)
+
+    pending = []
+    for row in snapshots:
+        first_seen = _as_datetime(row["first_seen_at"])
+        processed_at = _as_datetime(row["processed_at"])
+        unprocessed = (
+            _setting("lead_unprocessed_status_id", "NEW")
+            if row["entity_type"] == "lead"
+            else _setting("deal_unprocessed_stage_id", "NEW")
+        )
+        if first_seen and first_seen < end and (not processed_at or processed_at >= end):
+            if row["report_stage_id"] == unprocessed:
+                pending.append(row)
+    return {
+        "start": start,
+        "end": end,
+        "new": new,
+        "qualified": qualified,
+        "transferred": [
+            event for event in events
+            if is_transfer(event) and _in_window(event["occurred_at"], start, end)
+        ],
+        "pending": pending,
+    }
+
+
+def build_daily_report(
+    report_date: date | str,
+    *,
+    lead_status_map: dict[str, str] | None = None,
+    deal_stage_map: dict[str, str] | None = None,
+    user_map: dict[str, str] | None = None,
+) -> str:
     day = report_date.isoformat() if isinstance(report_date, date) else report_date
-    rows = store.rows("SELECT * FROM crm_items WHERE created_date=?", (day,))
+    data = interval_data(day)
+    start, end = data["start"], data["end"]
+    rows = data["new"]
+    processed = data["qualified"]
+    transfers = data["transferred"]
+    pending = data["pending"]
     leads = sum(row["entity_type"] == "lead" for row in rows)
     deals = sum(row["entity_type"] == "deal" for row in rows)
-    processed = [row for row in rows if row["processed_at"]]
-    pending = [row for row in rows if not row["processed_at"]]
 
     def label(row: dict, name_key: str, id_key: str, empty: str) -> str:
         return str(row[name_key] or row[id_key] or empty)
 
     sources = Counter(label(row, "source_name", "source_id", "Без источника") for row in rows)
     managers = Counter(label(row, "processed_by_name", "processed_by_id", "Без ответственного") for row in processed)
-    pending_managers = Counter(label(row, "current_assignee_name", "current_assignee_id", "Без ответственного") for row in pending)
+    pending_managers = Counter(
+        label(row, "report_assignee_name", "report_assignee_id", "Без ответственного")
+        for row in pending
+    )
+    lead_status_map = lead_status_map or {}
+    deal_stage_map = deal_stage_map or {}
+    user_map = user_map or {}
+    qualifications = Counter(
+        (lead_status_map if row["entity_type"] == "lead" else deal_stage_map).get(
+            str(row["report_stage_id"] or ""), str(row["report_stage_id"] or "Без стадии")
+        )
+        for row in processed
+    )
 
     lines = [
-        f"📊 <b>Новые обращения за {escape(day)}</b>",
-        f"Всего: <b>{len(rows)}</b> (лиды: {leads}, сделки: {deals})",
-        f"Обработано: <b>{len(processed)}</b>",
-        f"Осталось на стадии «Не обработан»: <b>{len(pending)}</b>",
+        f"📊 <b>События за {start:%d.%m %H:%M} — {end:%d.%m %H:%M}</b>",
+        f"Новые обращения: <b>{len(rows)}</b> (лиды: {leads}, сделки: {deals})",
+        f"Квалифицировано: <b>{len(processed)}</b>",
+        f"Передано: <b>{len(transfers)}</b>",
+        f"Сейчас на стадии «Не обработан»: <b>{len(pending)}</b>",
     ]
-    for title, values in (("Источники", sources), ("Обработали", managers), ("Остаток по менеджерам", pending_managers)):
+    for title, values in (
+        ("Источники новых", sources),
+        ("Результат квалификации", qualifications),
+        ("Квалифицировали", managers),
+        ("Остаток по менеджерам", pending_managers),
+    ):
         lines.append(f"\n<b>{title}</b>")
         lines.extend(f"• {escape(name)} — {count}" for name, count in values.most_common())
         if not values:
             lines.append("• нет")
+    lines.append("\n<b>Передачи</b>")
+    for event in transfers:
+        entity = "Лид" if event["entity_type"] == "lead" else "Сделка"
+        old_name = user_map.get(str(event["old_value"] or ""), str(event["old_value"] or "Без ответственного"))
+        new_name = user_map.get(str(event["new_value"] or ""), str(event["new_value"] or "Без ответственного"))
+        lines.append(
+            f"• {entity} №{escape(str(event['entity_id']))}: "
+            f"{escape(old_name)} → {escape(new_name)}"
+        )
+    if not transfers:
+        lines.append("• нет")
     return "\n".join(lines)
 
 

@@ -1,4 +1,4 @@
-"""Ежедневный отчёт по лидам, созданным за день — каждому продажнику свой, руководителям сводный."""
+"""Event-interval CRM reports for sales managers and directors."""
 from __future__ import annotations
 
 import asyncio
@@ -18,10 +18,8 @@ logger = logging.getLogger(__name__)
 MOSCOW_TZ = ZoneInfo("Europe/Moscow")
 
 
-def _today_bounds_moscow(now: datetime | None = None) -> tuple[str, str]:
-    now = now or datetime.now(MOSCOW_TZ)
-    start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    end = start + timedelta(days=1)
+def _report_bounds(report_now: datetime) -> tuple[str, str]:
+    start, end = stats.report_bounds(report_now.date())
     return start.isoformat(), end.isoformat()
 
 
@@ -34,8 +32,11 @@ def _group_leads_by_manager(leads: list[dict]) -> dict[str, list[dict]]:
         )
     }
     for lead in leads:
+        report_manager_id = str(lead.get("REPORT_ASSIGNED_BY_ID") or "")
         row = tracked_by_id.get(str(lead.get("ID") or ""))
-        if row:
+        if report_manager_id:
+            manager_id = report_manager_id
+        elif row:
             manager_id = str(
                 (row["processed_by_id"] if row["processed_at"] else row["current_assignee_id"]) or ""
             )
@@ -66,26 +67,68 @@ async def send_daily_reports(report_now: datetime | None = None) -> None:
     report_now = report_now or datetime.now(MOSCOW_TZ)
     report_date = report_now.date().isoformat()
 
-    start_iso, end_iso = _today_bounds_moscow(report_now)
+    start_iso, end_iso = _report_bounds(report_now)
     leads = await client.get_leads_created_between(start_iso, end_iso)
+    interval = stats.interval_data(report_date)
+    report_rows = {
+        row["entity_id"]: row
+        for key in ("new", "qualified")
+        for row in interval[key]
+        if row["entity_type"] == "lead"
+    }
+    for lead in leads:
+        row = report_rows.get(str(lead.get("ID") or ""))
+        if not row:
+            continue
+        lead["STATUS_ID"] = row["report_stage_id"]
+        lead["REPORT_ASSIGNED_BY_ID"] = (
+            row["processed_by_id"] if row["report_processed"] else row["report_assignee_id"]
+        )
+    lead_ids = {str(lead.get("ID") or "") for lead in leads}
+    for row in interval["qualified"]:
+        if row["entity_type"] != "lead" or row["entity_id"] in lead_ids:
+            continue
+        leads.append({
+            "ID": row["entity_id"],
+            "SOURCE_ID": row["source_id"],
+            "STATUS_ID": row["report_stage_id"],
+            "ASSIGNED_BY_ID": row["processed_by_id"],
+            "REPORT_ASSIGNED_BY_ID": row["processed_by_id"],
+        })
+        lead_ids.add(row["entity_id"])
     sales_ids = {str(user["ID"]) for user in await client.get_department_users(settings.sales_department_id)}
     by_manager = {
         manager_id: manager_leads
         for manager_id, manager_leads in _group_leads_by_manager(leads).items()
         if manager_id in sales_ids
     }
-    tracked_today = store.rows("SELECT 1 FROM crm_items WHERE created_date=? LIMIT 1", (report_date,))
-    if not by_manager and not tracked_today:
-        logger.info("Daily report: no leads created today, nothing to send")
+    has_events = any(interval[key] for key in ("new", "qualified", "transferred"))
+    if not by_manager and not has_events:
+        logger.info("Daily report: no events in report interval, nothing to send")
         return
 
     source_map: dict[str, str] = {}
     status_map: dict[str, str] = {}
-    if by_manager:
+    lead_status_map: dict[str, str] = {}
+    deal_stage_map: dict[str, str] = {}
+    if by_manager or interval["qualified"]:
         sources = await client.get_sources()
         statuses = await client.get_lead_statuses()
         source_map = {str(item["STATUS_ID"]): item["NAME"] for item in sources}
         status_map = {str(item["STATUS_ID"]): item["NAME"] for item in statuses}
+        lead_status_map = status_map
+        deal_stages = await client.get_deal_stages(getattr(settings, "track_deal_category_id", "0"))
+        deal_stage_map = {str(item["STATUS_ID"]): item["NAME"] for item in deal_stages}
+    transfer_user_ids = {
+        str(value)
+        for event in interval["transferred"]
+        for value in (event["old_value"], event["new_value"])
+        if value
+    }
+    user_map = {
+        user_id: await client.get_user_name(user_id) or user_id
+        for user_id in transfer_user_ids
+    }
     portal_domain = urlparse(settings.bitrix_webhook_url).netloc
     today_label = report_now.strftime("%d.%m.%Y")
 
@@ -111,8 +154,13 @@ async def send_daily_reports(report_now: datetime | None = None) -> None:
     digest_text = f"📊 <b>Сводный отчёт за {today_label}</b>\n\n" + "\n\n──────────\n\n".join(
         f"👤 <b>{escape(name)}</b>\n\n{body}" for name, body in manager_blocks
     )
-    if tracked_today:
-        digest_text += "\n\n──────────\n\n" + stats.build_daily_report(report_date)
+    if has_events:
+        digest_text += "\n\n──────────\n\n" + stats.build_daily_report(
+            report_date,
+            lead_status_map=lead_status_map,
+            deal_stage_map=deal_stage_map,
+            user_map=user_map,
+        )
     for director_id in settings.director_user_id_set:
         delivery_key = f"director:{director_id}"
         if _delivered(report_date, delivery_key):
