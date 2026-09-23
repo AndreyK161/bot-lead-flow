@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import logging
 from contextlib import asynccontextmanager, suppress
 from urllib.parse import urlparse
@@ -70,6 +71,11 @@ async def bitrix_webhook(request: Request) -> dict[str, str]:
     application_token = form.get("auth[application_token]")
     allowed_tokens = getattr(settings, "bitrix_application_token_set", {settings.bitrix_application_token})
     if application_token not in allowed_tokens:
+        raw_token = str(application_token or "")
+        logger.warning(
+            "Rejected Bitrix webhook event=%s token_sha256=%s token_length=%s",
+            form.get("event"), hashlib.sha256(raw_token.encode()).hexdigest()[:12], len(raw_token),
+        )
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid application token")
 
     event = form.get("event")
