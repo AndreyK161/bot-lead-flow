@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request, status
 
-from app import deals, manual, reports, stats, store
+from app import deals, journal, manual, reconcile, reports, stats, store
 from app.bitrix_client import BitrixApiError, BitrixClient
 from app.config import get_settings
 from app.formatter import (
@@ -43,6 +43,8 @@ async def lifespan(app):
         asyncio.create_task(deals.polling_loop()),
         asyncio.create_task(manual.recovery_loop()),
         asyncio.create_task(reports.daily_report_loop()),
+        asyncio.create_task(reconcile.reconciliation_loop()),
+        asyncio.create_task(_bitrix_event_recovery_loop()),
     ]
     yield
     for task in tasks:
@@ -61,39 +63,26 @@ def _portal_domain(webhook_url: str) -> str | None:
     return host or None
 
 
-@app.post("/bitrix/webhook")
-async def bitrix_webhook(request: Request) -> dict[str, str]:
+async def _process_bitrix_event(event: str, entity_id: str | None) -> dict[str, str]:
     settings = get_settings()
-
-    # Bitrix шлёт form-urlencoded с вложенными ключами вида data[FIELDS][ID].
-    form = await request.form()
-
-    application_token = form.get("auth[application_token]")
-    allowed_tokens = getattr(settings, "bitrix_application_token_set", {settings.bitrix_application_token})
-    if application_token not in allowed_tokens:
-        raw_token = str(application_token or "")
-        logger.warning(
-            "Rejected Bitrix webhook event=%s token_sha256=%s token_length=%s",
-            form.get("event"), hashlib.sha256(raw_token.encode()).hexdigest()[:12], len(raw_token),
-        )
-        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid application token")
-
-    event = form.get("event")
     if event in {"ONCRMDEALADD", "ONCRMDEALUPDATE"}:
-        deal_id = form.get("data[FIELDS][ID]")
-        if not deal_id:
+        if not entity_id:
             raise HTTPException(status_code=400, detail="Missing deal id")
         async with deals.lock:
-            tracked = await (deals.track(deal_id) if event == "ONCRMDEALADD" else deals.observe_update(deal_id))
+            tracked = await (
+                deals.track(entity_id)
+                if event == "ONCRMDEALADD"
+                else deals.observe_update(entity_id)
+            )
         return {"status": "ok" if tracked else "ignored"}
 
     if event not in {"ONCRMLEADADD", "ONCRMLEADUPDATE"}:
         # Не наш эндпоинт настроен на другое событие — просто игнорируем.
         return {"status": "ignored"}
 
-    lead_id = form.get("data[FIELDS][ID]")
-    if not lead_id:
+    if not entity_id:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Missing lead id")
+    lead_id = entity_id
 
     client = BitrixClient()
 
@@ -154,6 +143,62 @@ async def bitrix_webhook(request: Request) -> dict[str, str]:
             logger.exception("Failed to send Telegram DM to admin_id=%s for lead_id=%s", admin_id, lead_id)
 
     return {"status": "ok"}
+
+
+@app.post("/bitrix/webhook")
+async def bitrix_webhook(request: Request) -> dict[str, str]:
+    settings = get_settings()
+
+    # Bitrix шлёт form-urlencoded с вложенными ключами вида data[FIELDS][ID].
+    form = await request.form()
+    application_token = form.get("auth[application_token]")
+    allowed_tokens = getattr(settings, "bitrix_application_token_set", {settings.bitrix_application_token})
+    if application_token not in allowed_tokens:
+        raw_token = str(application_token or "")
+        logger.warning(
+            "Rejected Bitrix webhook event=%s token_sha256=%s token_length=%s",
+            form.get("event"), hashlib.sha256(raw_token.encode()).hexdigest()[:12], len(raw_token),
+        )
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid application token")
+
+    event = str(form.get("event") or "")
+    entity_id = form.get("data[FIELDS][ID]")
+    if event.startswith("ONCRMLEAD"):
+        entity_type = "lead"
+    elif event.startswith("ONCRMDEAL"):
+        entity_type = "deal"
+    else:
+        entity_type = None
+    entry, already_processed = journal.begin(
+        event,
+        entity_type,
+        str(entity_id) if entity_id else None,
+        form.multi_items() if hasattr(form, "multi_items") else form.items(),
+    )
+    if already_processed:
+        return {"status": "duplicate"}
+    try:
+        result = await _process_bitrix_event(event, str(entity_id) if entity_id else None)
+        journal.mark_processed(entry["id"])
+        return result
+    except Exception as exc:
+        journal.mark_failed(entry["id"], exc)
+        raise
+
+
+async def _bitrix_event_recovery_loop() -> None:
+    """Retry durable events left pending/failed by network errors or restarts."""
+    await asyncio.sleep(30)
+    while True:
+        for entry in journal.retryable():
+            try:
+                journal.mark_retrying(entry["id"])
+                await _process_bitrix_event(entry["event_name"], entry["entity_id"])
+                journal.mark_processed(entry["id"])
+            except Exception as exc:
+                journal.mark_failed(entry["id"], exc)
+                logger.exception("Bitrix journal retry failed event_id=%s", entry["id"])
+        await asyncio.sleep(30)
 
 
 async def _notify_assigned_manager(client: BitrixClient, settings, lead_id: str, bitrix_user_id: str, assigned_name: str | None) -> None:

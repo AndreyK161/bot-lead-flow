@@ -28,6 +28,7 @@ TABLES = (
     "seen_lead_phones",
     "crm_items",
     "crm_item_events",
+    "bitrix_events",
     "daily_report_deliveries",
 )
 

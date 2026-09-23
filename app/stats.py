@@ -37,6 +37,19 @@ def _created_date(raw: object, now: datetime | None = None) -> str:
     return (now or datetime.now(timezone)).astimezone(timezone).date().isoformat()
 
 
+def _bitrix_datetime(raw: object) -> datetime | None:
+    if not raw:
+        return None
+    try:
+        value = datetime.fromisoformat(str(raw).replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    timezone = ZoneInfo(_setting("daily_stats_timezone", "Europe/Moscow"))
+    if value.tzinfo is None:
+        value = value.replace(tzinfo=timezone)
+    return value.astimezone(timezone)
+
+
 def _event(
     entity_type: str,
     entity_id: str,
@@ -76,7 +89,18 @@ def record(
         (entity_type, entity_id),
     )
     existing = existing_rows[0] if existing_rows else None
-    timestamp = (now or datetime.now(ZoneInfo(_setting("daily_stats_timezone", "Europe/Moscow")))).isoformat()
+    event_time = now or _bitrix_datetime(item.get("DATE_MODIFY")) or datetime.now(
+        ZoneInfo(_setting("daily_stats_timezone", "Europe/Moscow"))
+    )
+    timestamp = event_time.isoformat()
+    if existing:
+        existing_updated_at = _as_datetime(existing["updated_at"])
+        if existing_updated_at and event_time < existing_updated_at:
+            logger.info(
+                "Ignoring stale %s update entity_id=%s event_time=%s current_time=%s",
+                entity_type, entity_id, timestamp, existing["updated_at"],
+            )
+            return existing
 
     processed_at = existing["processed_at"] if existing else None
     processed_by_id = existing["processed_by_id"] if existing else None
@@ -115,6 +139,7 @@ def record(
              processed_at, processed_by_id, processed_by_name, timestamp, entity_type, entity_id),
         )
     else:
+        first_seen_at = (_bitrix_datetime(item.get("DATE_CREATE")) or event_time).isoformat()
         store.execute(
             """INSERT INTO crm_items
                (entity_type,entity_id,source_id,source_name,created_date,current_stage_id,
@@ -123,7 +148,7 @@ def record(
                VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (entity_type, entity_id, source_id, source_name, _created_date(item.get("DATE_CREATE"), now),
              stage_id, assignee_id, assignee_name, processed_at, processed_by_id,
-             processed_by_name, timestamp, timestamp),
+             processed_by_name, first_seen_at, timestamp),
         )
         _event(entity_type, entity_id, "created", None, stage_id, timestamp)
     return store.rows(
@@ -131,7 +156,13 @@ def record(
     )[0]
 
 
-async def observe(entity_type: str, item: dict, client: BitrixClient | None = None) -> dict | None:
+async def observe(
+    entity_type: str,
+    item: dict,
+    client: BitrixClient | None = None,
+    *,
+    now: datetime | None = None,
+) -> dict | None:
     if entity_type == "deal" and str(item.get("CATEGORY_ID")) != _setting("track_deal_category_id", "0"):
         return None
     client = client or BitrixClient()
@@ -149,7 +180,7 @@ async def observe(entity_type: str, item: dict, client: BitrixClient | None = No
         source_name = await client.get_source_name(source_id)
     if assignee_id and not assignee_name:
         assignee_name = await client.get_user_name(assignee_id)
-    return record(entity_type, item, source_name=source_name, assignee_name=assignee_name)
+    return record(entity_type, item, source_name=source_name, assignee_name=assignee_name, now=now)
 
 
 def report_bounds(report_date: date | str) -> tuple[datetime, datetime]:

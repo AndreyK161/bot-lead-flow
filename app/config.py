@@ -56,6 +56,9 @@ class Settings(BaseSettings):
     deal_unprocessed_stage_id: str = "NEW"
     daily_stats_time: str = "19:00"
     daily_stats_timezone: str = "Europe/Moscow"
+    reconcile_interval_seconds: int = 300
+    reconcile_overlap_seconds: int = 300
+    reconcile_initial_lookback_hours: int = 24
 
 
 @lru_cache

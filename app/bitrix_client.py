@@ -31,6 +31,7 @@ LEAD_SELECT_FIELDS = [
     "ASSIGNED_BY_ID",
     "STATUS_ID",
     "DATE_CREATE",
+    "DATE_MODIFY",
 ]
 
 DEAL_SELECT_FIELDS = [
@@ -38,6 +39,7 @@ DEAL_SELECT_FIELDS = [
     "SOURCE_DESCRIPTION", "COMMENTS", "ASSIGNED_BY_ID", "CONTACT_ID",
     "UTM_SOURCE", "UTM_MEDIUM", "UTM_CAMPAIGN", "UTM_CONTENT", "UTM_TERM", "LEAD_ID",
     "DATE_CREATE",
+    "DATE_MODIFY",
 ]
 
 
@@ -47,6 +49,10 @@ class BitrixClient:
         self._base_url = base.rstrip("/") + "/"
 
     async def _call(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
+        payload = await self._call_payload(method, params)
+        return payload["result"]
+
+    async def _call_payload(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         url = self._base_url + method
         async with httpx.AsyncClient(timeout=15.0) as client:
             response = await client.post(url, json=params or {})
@@ -54,7 +60,19 @@ class BitrixClient:
         payload = response.json()
         if "error" in payload:
             raise BitrixApiError(f"{method}: {payload.get('error')} — {payload.get('error_description')}")
-        return payload["result"]
+        return payload
+
+    async def _call_all(self, method: str, params: dict[str, Any]) -> list[dict[str, Any]]:
+        """Read every Bitrix list page instead of silently stopping at the first 50 rows."""
+        result: list[dict[str, Any]] = []
+        start = 0
+        while True:
+            page_params = {**params, "start": start}
+            payload = await self._call_payload(method, page_params)
+            result.extend(payload.get("result") or [])
+            if "next" not in payload:
+                return result
+            start = int(payload["next"])
 
     async def get_lead(self, lead_id: str | int) -> dict[str, Any]:
         return await self._call("crm.lead.get", {"id": lead_id, "select": LEAD_SELECT_FIELDS})
@@ -125,9 +143,29 @@ class BitrixClient:
         return await self._call("crm.status.list", {"filter": {"ENTITY_ID": entity_id}})
 
     async def get_leads_created_between(self, start_iso: str, end_iso: str) -> list[dict[str, Any]]:
-        return await self._call("crm.lead.list", {
+        return await self._call_all("crm.lead.list", {
             "filter": {">=DATE_CREATE": start_iso, "<DATE_CREATE": end_iso},
             "select": ["ID", "SOURCE_ID", "STATUS_ID", "ASSIGNED_BY_ID"],
+        })
+
+    async def get_leads_modified_between(self, start_iso: str, end_iso: str) -> list[dict[str, Any]]:
+        return await self._call_all("crm.lead.list", {
+            "order": {"DATE_MODIFY": "ASC", "ID": "ASC"},
+            "filter": {">=DATE_MODIFY": start_iso, "<DATE_MODIFY": end_iso},
+            "select": LEAD_SELECT_FIELDS,
+        })
+
+    async def get_deals_modified_between(
+        self, category_id: str, start_iso: str, end_iso: str,
+    ) -> list[dict[str, Any]]:
+        return await self._call_all("crm.deal.list", {
+            "order": {"DATE_MODIFY": "ASC", "ID": "ASC"},
+            "filter": {
+                "CATEGORY_ID": str(category_id),
+                ">=DATE_MODIFY": start_iso,
+                "<DATE_MODIFY": end_iso,
+            },
+            "select": DEAL_SELECT_FIELDS,
         })
 
     async def get_deal(self, deal_id: str | int) -> dict[str, Any]:

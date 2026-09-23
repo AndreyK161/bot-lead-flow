@@ -69,6 +69,18 @@ def _schema(*, postgres: bool) -> str:
             event_type TEXT NOT NULL, old_value TEXT, new_value TEXT,
             occurred_at {timestamp} NOT NULL DEFAULT CURRENT_TIMESTAMP
         );
+        CREATE TABLE IF NOT EXISTS bitrix_events (
+            id {event_id}, payload_hash TEXT NOT NULL UNIQUE,
+            event_name TEXT NOT NULL, entity_type TEXT, entity_id TEXT,
+            event_at {timestamp}, received_at {timestamp} NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            payload_json TEXT NOT NULL, status TEXT NOT NULL DEFAULT 'pending',
+            attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT,
+            processed_at {timestamp}
+        );
+        CREATE INDEX IF NOT EXISTS idx_bitrix_events_status_received
+            ON bitrix_events(status,received_at);
+        CREATE INDEX IF NOT EXISTS idx_crm_item_events_entity_time
+            ON crm_item_events(entity_type,entity_id,occurred_at);
         CREATE TABLE IF NOT EXISTS daily_report_deliveries (
             report_date TEXT NOT NULL, chat_id TEXT NOT NULL, message_id BIGINT,
             PRIMARY KEY (report_date, chat_id)
@@ -160,6 +172,13 @@ def execute(sql, params=()):
 def rows(sql, params=()):
     with db() as conn:
         return [dict(row) for row in conn.execute(sql, params)]
+
+
+@contextmanager
+def transaction():
+    """Expose one portable transaction for multi-statement state changes."""
+    with db() as conn:
+        yield conn
 
 
 def submission(identifier):
