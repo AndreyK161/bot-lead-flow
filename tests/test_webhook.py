@@ -248,6 +248,45 @@ class TelegramWebhookAuthTests(WebhookTestCase):
         button = self.send_message.call_args.kwargs['reply_markup']['inline_keyboard'][0][0]
         self.assertEqual(button['web_app']['url'], 'https://lead.prav-buro.ru/miniapp')
 
+    async def test_app_command_is_available_to_admin_without_director_role(self):
+        admin_id = 1297686797
+        self.settings.director_user_id_set = set()
+        self.settings.admin_user_id_set = {admin_id}
+        self.settings.mini_app_url = 'https://lead.prav-buro.ru/miniapp'
+        request = json_request(
+            headers={'X-Telegram-Bot-Api-Secret-Token': 'secret'},
+            message={
+                'chat': {'id': admin_id, 'type': 'private'},
+                'from': {'id': admin_id},
+                'text': '/app',
+            },
+        )
+
+        await main.telegram_webhook(request)
+
+        self.send_message.assert_awaited_once()
+        self.assertEqual(self.send_message.call_args.kwargs['chat_id'], admin_id)
+        button = self.send_message.call_args.kwargs['reply_markup']['inline_keyboard'][0][0]
+        self.assertEqual(button['web_app']['url'], 'https://lead.prav-buro.ru/miniapp')
+
+    async def test_app_command_is_not_available_to_regular_manager(self):
+        manager_id = 1297686797
+        self.settings.director_user_id_set = set()
+        self.settings.admin_user_id_set = set()
+        request = json_request(
+            headers={'X-Telegram-Bot-Api-Secret-Token': 'secret'},
+            message={
+                'chat': {'id': manager_id, 'type': 'private'},
+                'from': {'id': manager_id},
+                'text': '/app',
+            },
+        )
+
+        with patch('app.main.manual.handle_main_message', new=AsyncMock(return_value=False)):
+            await main.telegram_webhook(request)
+
+        self.send_message.assert_not_awaited()
+
     async def test_manual_callback_is_acknowledged_before_processing(self):
         callback={'id':'cb-manual','from':{'id':100},'data':'ms:abc:tg','message':{'chat':{'id':100},'message_id':1}}
         request=json_request(headers={'X-Telegram-Bot-Api-Secret-Token':'secret'},update_id=78,callback_query=callback)

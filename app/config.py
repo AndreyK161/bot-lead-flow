@@ -44,6 +44,11 @@ class Settings(BaseSettings):
     def admin_user_id_set(self) -> set[int]:
         return {int(x.strip()) for x in self.admin_users.split(",") if x.strip()}
 
+    @property
+    def mini_app_user_id_set(self) -> set[int]:
+        """Directors and technical admins may open analytical reports."""
+        return self.director_user_id_set | self.admin_user_id_set
+
     # Отдел в Bitrix, из которого предлагать список ответственных при назначении
     sales_department_id: str
 

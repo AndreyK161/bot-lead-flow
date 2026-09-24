@@ -59,7 +59,8 @@ def _authorized_user(request: Request) -> int:
         user_id = int(user["id"])
     except (ValueError, KeyError, TypeError):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Open this report from Telegram")
-    if user_id not in settings.director_user_id_set:
+    allowed_users = settings.director_user_id_set | settings.admin_user_id_set
+    if user_id not in allowed_users:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
     return user_id
 

@@ -5,8 +5,11 @@ import time
 import unittest
 from datetime import date, datetime
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 from urllib.parse import urlencode
+
+from fastapi import HTTPException
 
 from app import miniapp
 
@@ -42,6 +45,28 @@ class MiniAppAuthenticationTests(unittest.TestCase):
         payload = signed_init_data(auth_date=now - miniapp.MAX_AUTH_AGE_SECONDS - 1)
         with self.assertRaisesRegex(ValueError, "expired"):
             miniapp.validate_init_data(payload, BOT_TOKEN, now=now)
+
+    def test_authorizes_admin_without_director_role(self):
+        request = SimpleNamespace(headers={"X-Telegram-Init-Data": signed_init_data()})
+        settings = SimpleNamespace(
+            telegram_bot_token=BOT_TOKEN,
+            director_user_id_set=set(),
+            admin_user_id_set={TEST_USER_ID},
+        )
+        with patch("app.miniapp.get_settings", return_value=settings):
+            self.assertEqual(miniapp._authorized_user(request), TEST_USER_ID)
+
+    def test_rejects_regular_manager(self):
+        request = SimpleNamespace(headers={"X-Telegram-Init-Data": signed_init_data()})
+        settings = SimpleNamespace(
+            telegram_bot_token=BOT_TOKEN,
+            director_user_id_set=set(),
+            admin_user_id_set=set(),
+        )
+        with patch("app.miniapp.get_settings", return_value=settings):
+            with self.assertRaises(HTTPException) as ctx:
+                miniapp._authorized_user(request)
+        self.assertEqual(ctx.exception.status_code, 403)
 
 
 class MiniAppReportTests(unittest.TestCase):

@@ -41,11 +41,11 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 @asynccontextmanager
 async def lifespan(app):
     settings = get_settings()
-    for director_id in settings.director_user_id_set:
+    for account_id in settings.mini_app_user_id_set:
         try:
-            await set_chat_menu_button(settings.mini_app_url, chat_id=director_id)
+            await set_chat_menu_button(settings.mini_app_url, chat_id=account_id)
         except Exception:
-            logger.exception("Failed to configure Mini App menu button for director_id=%s", director_id)
+            logger.exception("Failed to configure Mini App menu button for user_id=%s", account_id)
     tasks = [
         asyncio.create_task(deals.polling_loop()),
         asyncio.create_task(manual.recovery_loop()),
@@ -245,26 +245,30 @@ async def _handle_message(message: dict, settings, update_id: int) -> None:
     user = message.get("from") or {}
     user_id = user.get("id")
     text = (message.get("text") or "").strip()
+    mini_app_users = settings.director_user_id_set | settings.admin_user_id_set
 
     if text == "/start":
         store.record_start(user_id, user.get("username"), user.get("first_name"))
         help_text = "Готово — вы будете получать уведомления от бота здесь."
+        if user_id in mini_app_users:
+            help_text += "\n\n/app — интерактивные отчёты"
         if user_id in settings.director_user_id_set:
             help_text += (
-                "\n\nДля ручной заявки отправьте номер телефона."
-                "\n/app — интерактивные отчёты"
+                "\nДля ручной заявки отправьте номер телефона."
                 "\n/period ДД.ММ.ГГГГ - ДД.ММ.ГГГГ — текущий результат обращений"
                 "\n/source — настроить источники\n/cancel — отменить ввод заявки"
             )
+        if user_id in settings.admin_user_id_set:
+            help_text += "\n/link — привязать менеджера\n/links — посмотреть привязки"
         await send_telegram_message(
             help_text,
             chat_id=user_id,
-            reply_markup=_mini_app_keyboard(settings) if user_id in settings.director_user_id_set else None,
+            reply_markup=_mini_app_keyboard(settings) if user_id in mini_app_users else None,
         )
         return
 
     command = text.split()[0].split("@")[0].lower() if text else ""
-    if command == "/app" and user_id in settings.director_user_id_set:
+    if command == "/app" and user_id in mini_app_users:
         await send_telegram_message(
             "📊 Выберите период и посмотрите актуальные стадии обращений.",
             chat_id=user_id,
