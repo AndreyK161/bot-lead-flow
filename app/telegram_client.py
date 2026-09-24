@@ -2,11 +2,120 @@
 
 from __future__ import annotations
 
+from html.parser import HTMLParser
 from typing import Any
 
 import httpx
 
 from app.config import get_settings
+
+
+# Telegram accepts at most 4096 characters in a text message.  A small reserve
+# also covers differences between raw HTML and the text counted by Telegram.
+TELEGRAM_TEXT_LIMIT = 4000
+
+
+class _TelegramHtmlSplitter(HTMLParser):
+    """Split generated Telegram HTML while keeping every chunk valid HTML."""
+
+    def __init__(self, limit: int) -> None:
+        super().__init__(convert_charrefs=False)
+        self.limit = limit
+        self.chunks: list[str] = []
+        self.parts: list[str] = []
+        self.open_tags: list[tuple[str, str]] = []
+
+    def _closers(self) -> str:
+        return "".join(f"</{tag}>" for tag, _ in reversed(self.open_tags))
+
+    def _reopeners(self) -> str:
+        return "".join(raw for _, raw in self.open_tags)
+
+    def _flush(self) -> None:
+        if not self.parts:
+            return
+        chunk = "".join(self.parts) + self._closers()
+        if chunk:
+            self.chunks.append(chunk)
+        reopeners = self._reopeners()
+        self.parts = [reopeners] if reopeners else []
+
+    def _available(self) -> int:
+        return self.limit - len("".join(self.parts)) - len(self._closers())
+
+    def _append_atomic(self, value: str) -> None:
+        if len(value) > self._available() and self.parts:
+            self._flush()
+        self.parts.append(value)
+
+    def _append_text(self, value: str) -> None:
+        remaining = value
+        while remaining:
+            available = self._available()
+            if available <= 0:
+                self._flush()
+                continue
+            if len(remaining) <= available:
+                self.parts.append(remaining)
+                return
+
+            split_at = max(
+                remaining.rfind("\n", 0, available + 1),
+                remaining.rfind(" ", 0, available + 1),
+            )
+            if split_at <= 0:
+                split_at = available
+            else:
+                split_at += 1  # Keep the separator; no text is lost.
+            self.parts.append(remaining[:split_at])
+            remaining = remaining[split_at:]
+            self._flush()
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        raw = self.get_starttag_text()
+        closing = f"</{tag}>"
+        if len(raw) + len(closing) > self._available() and self.parts:
+            self._flush()
+        self.parts.append(raw)
+        self.open_tags.append((tag, raw))
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self._append_atomic(self.get_starttag_text())
+
+    def handle_endtag(self, tag: str) -> None:
+        self.parts.append(f"</{tag}>")
+        for index in range(len(self.open_tags) - 1, -1, -1):
+            if self.open_tags[index][0] == tag:
+                del self.open_tags[index]
+                break
+
+    def handle_data(self, data: str) -> None:
+        self._append_text(data)
+
+    def handle_entityref(self, name: str) -> None:
+        self._append_atomic(f"&{name};")
+
+    def handle_charref(self, name: str) -> None:
+        self._append_atomic(f"&#{name};")
+
+    def handle_comment(self, data: str) -> None:
+        self._append_atomic(f"<!--{data}-->")
+
+    def finish(self) -> list[str]:
+        if self.parts:
+            self.chunks.append("".join(self.parts))
+            self.parts = []
+        return [chunk for chunk in self.chunks if chunk]
+
+
+def split_telegram_html(text: str, limit: int = TELEGRAM_TEXT_LIMIT) -> list[str]:
+    """Return non-empty, independently valid HTML chunks within the limit."""
+    if len(text) <= limit:
+        return [text]
+    splitter = _TelegramHtmlSplitter(limit)
+    splitter.feed(text)
+    splitter.close()
+    return splitter.finish()
 
 
 async def _call(method: str, payload: dict[str, Any]) -> dict[str, Any]:
@@ -31,17 +140,21 @@ async def send_telegram_message(
     chat_id: int | str | None = None,
     reply_markup: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    settings = get_settings()
-    payload: dict[str, Any] = {
-        "chat_id": chat_id if chat_id is not None else settings.telegram_chat_id,
-        "text": text,
-        "parse_mode": "HTML",
-        "disable_web_page_preview": True,
-    }
-    if reply_markup is not None:
-        payload["reply_markup"] = reply_markup
-    result = await _call("sendMessage", payload)
-    return result["result"]
+    target_chat_id = chat_id if chat_id is not None else get_settings().telegram_chat_id
+    chunks = split_telegram_html(text)
+    last_message: dict[str, Any] = {}
+    for index, chunk in enumerate(chunks):
+        payload: dict[str, Any] = {
+            "chat_id": target_chat_id,
+            "text": chunk,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
+        if reply_markup is not None and index == len(chunks) - 1:
+            payload["reply_markup"] = reply_markup
+        result = await _call("sendMessage", payload)
+        last_message = result["result"]
+    return last_message
 
 
 async def edit_message_text(
@@ -51,16 +164,29 @@ async def edit_message_text(
     *,
     reply_markup: dict[str, Any] | None = None,
 ) -> None:
+    chunks = split_telegram_html(text)
     payload: dict[str, Any] = {
         "chat_id": chat_id,
         "message_id": message_id,
-        "text": text,
+        "text": chunks[0],
         "parse_mode": "HTML",
         "disable_web_page_preview": True,
     }
-    if reply_markup is not None:
+    if len(chunks) > 1:
+        payload["reply_markup"] = {"inline_keyboard": []}
+    elif reply_markup is not None:
         payload["reply_markup"] = reply_markup
     await _call("editMessageText", payload)
+    for index, chunk in enumerate(chunks[1:], start=1):
+        follow_up: dict[str, Any] = {
+            "chat_id": chat_id,
+            "text": chunk,
+            "parse_mode": "HTML",
+            "disable_web_page_preview": True,
+        }
+        if reply_markup is not None and index == len(chunks) - 1:
+            follow_up["reply_markup"] = reply_markup
+        await _call("sendMessage", follow_up)
 
 
 async def edit_message_reply_markup(
