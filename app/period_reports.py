@@ -113,6 +113,16 @@ async def collect_live_period(
     contracts_by_source = outcomes._match_contracts(
         contract_candidates, list(sales_by_id.values()), contract_field,
     )
+    manager_ids = sorted({
+        str(item.get("ASSIGNED_BY_ID") or "")
+        for item in [*leads, *sales_by_id.values()]
+        if str(item.get("ASSIGNED_BY_ID") or "")
+    })
+    manager_values = await asyncio.gather(*(client.get_user_name(user_id) for user_id in manager_ids))
+    manager_names = {
+        user_id: name or f"Сотрудник #{user_id}"
+        for user_id, name in zip(manager_ids, manager_values)
+    }
     lead_stage_order = [lead_names[str(item.get("STATUS_ID") or "")] for item in lead_statuses]
     sale_stage_order = [sale_names[str(item.get("STATUS_ID") or "")] for item in sale_stages]
     lead_details: list[dict] = []
@@ -130,6 +140,7 @@ async def collect_live_period(
             lead_stage_id, lead_stage_id or "Без стадии",
         )
         source_id = str(lead.get("SOURCE_ID") or "")
+        manager_id = str(lead.get("ASSIGNED_BY_ID") or "")
         lead_details.append({
             "lead_id": lead_id,
             "created_date": str(lead.get("DATE_CREATE") or "")[:10],
@@ -145,6 +156,8 @@ async def collect_live_period(
             ),
             "converted": bool(deal),
             "contract": bool(contract),
+            "manager_id": manager_id,
+            "manager_name": manager_names.get(manager_id, "Без ответственного"),
         })
         if deal:
             deal_id = str(deal["ID"])
@@ -165,6 +178,7 @@ async def collect_live_period(
         contract = contracts_by_source.get(deal_id)
         source_id = str(deal.get("SOURCE_ID") or (origin_lead or {}).get("SOURCE_ID") or "")
         sale_stage_id = str(deal.get("STAGE_ID") or "")
+        manager_id = str(deal.get("ASSIGNED_BY_ID") or "")
         deal_details.append({
             "deal_id": deal_id,
             "created_date": str(deal.get("DATE_CREATE") or "")[:10],
@@ -179,6 +193,8 @@ async def collect_live_period(
                 str((contract or {}).get("STAGE_ID") or ""),
             ),
             "contract": bool(contract),
+            "manager_id": manager_id,
+            "manager_name": manager_names.get(manager_id, "Без ответственного"),
         })
 
     observed_lead_stages = {row["result_stage"] for row in lead_details}

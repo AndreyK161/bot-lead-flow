@@ -34,6 +34,7 @@ class LivePeriodReportTests(unittest.IsolatedAsyncioTestCase):
         client.get_leads_created_between_full.return_value = [
             {
                 "ID": "10", "SOURCE_ID": "WEB", "STATUS_ID": "CONVERTED", "CONTACT_ID": "500",
+                "ASSIGNED_BY_ID": "7",
                 "DATE_CREATE": "2026-09-02T10:00:00+03:00",
             },
             {
@@ -59,14 +60,19 @@ class LivePeriodReportTests(unittest.IsolatedAsyncioTestCase):
         ]
         sale = {
             "ID": "20", "LEAD_ID": "10", "CONTACT_ID": "500", "CATEGORY_ID": "0",
+            "ASSIGNED_BY_ID": "8",
             "STAGE_ID": "WON", "DATE_CREATE": "2026-09-04T10:00:00+03:00",
         }
         client.get_deals_by_lead_ids.return_value = [sale]
         client.get_deals_by_contact_ids.return_value = [sale]
         client.get_deals_created_between_full.return_value = [sale, {
             "ID": "21", "LEAD_ID": None, "CONTACT_ID": "900", "CATEGORY_ID": "0",
+            "ASSIGNED_BY_ID": "9",
             "SOURCE_ID": "VK", "STAGE_ID": "NEW", "DATE_CREATE": "2026-09-06T10:00:00+03:00",
         }]
+        client.get_user_name.side_effect = lambda user_id: {
+            "7": "Анна Лидова", "8": "Борис Сделкин", "9": "Вера Прямая",
+        }.get(user_id)
         client.get_deals_created_since.return_value = [{
             "ID": "30", "CONTACT_ID": "500", "CATEGORY_ID": "2", "STAGE_ID": "C2:NEW",
             "DATE_CREATE": "2026-09-05T10:00:00+03:00",
@@ -86,6 +92,9 @@ class LivePeriodReportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(contract["deal_id"], "20")
         self.assertEqual(contract["contract_id"], "30")
         self.assertEqual(contract["result_stage"], "Сконвертирован")
+        self.assertEqual(contract["manager_name"], "Анна Лидова")
+        converted_deal = next(item for item in data["deals"] if item["deal_id"] == "20")
+        self.assertEqual(converted_deal["manager_name"], "Борис Сделкин")
         self.assertIn("Недозвон", data["lead_stage_columns"])
 
         content = period_reports.build_workbook(data)

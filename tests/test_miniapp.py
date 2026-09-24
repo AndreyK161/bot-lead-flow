@@ -49,15 +49,32 @@ class MiniAppReportTests(unittest.TestCase):
             "start": date(2026, 9, 1),
             "end": date(2026, 9, 23),
             "checked_at": datetime(2026, 9, 24, 12, 0),
+            "portal_domain": "example.bitrix24.ru",
             "unique_total": 3,
             "direct_deal_count": 1,
             "leads": [
-                {"source_name": "Сайт", "result_stage": "Недозвон", "converted": False},
-                {"source_name": "Сайт", "result_stage": "Сконвертирован", "converted": True},
+                {
+                    "lead_id": "10", "deal_id": "", "source_name": "Сайт",
+                    "result_stage": "Недозвон", "converted": False, "contract": False,
+                    "manager_id": "1", "manager_name": "Анна",
+                },
+                {
+                    "lead_id": "11", "deal_id": "20", "source_name": "Сайт",
+                    "result_stage": "Сконвертирован", "converted": True, "contract": True,
+                    "manager_id": "2", "manager_name": "Борис",
+                },
             ],
             "deals": [
-                {"source_name": "Сайт", "stage": "Приоритет", "contract": True},
-                {"source_name": "Telegram", "stage": "Не обработан", "contract": False},
+                {
+                    "deal_id": "20", "source_name": "Сайт", "stage": "Приоритет",
+                    "contract": True, "converted_from_report_lead": True,
+                    "manager_id": "2", "manager_name": "Борис",
+                },
+                {
+                    "deal_id": "21", "source_name": "Telegram", "stage": "Не обработан",
+                    "contract": False, "converted_from_report_lead": False,
+                    "manager_id": "1", "manager_name": "Анна",
+                },
             ],
         })
 
@@ -69,6 +86,12 @@ class MiniAppReportTests(unittest.TestCase):
         self.assertEqual(payload["leads"][0]["total"], 2)
         site_deals = next(row for row in payload["deals"] if row["source"] == "Сайт")
         self.assertEqual(site_deals["contracts"], 1)
+        item = site_deals["stages"][0]["items"][0]
+        self.assertEqual(item["url"], "https://example.bitrix24.ru/crm/deal/details/20/")
+        self.assertEqual(item["manager_name"], "Борис")
+        self.assertEqual(payload["managers"], [
+            {"id": "1", "name": "Анна"}, {"id": "2", "name": "Борис"},
+        ])
 
     def test_page_has_native_date_inputs_and_both_tabs(self):
         html = Path(miniapp.HTML_PATH).read_text(encoding="utf-8")
@@ -76,6 +99,8 @@ class MiniAppReportTests(unittest.TestCase):
         self.assertIn('data-tab="leads"', html)
         self.assertIn('data-tab="deals"', html)
         self.assertIn("Показать отчёт", html)
+        self.assertIn('id="manager-options"', html)
+        self.assertIn('className = \'entity-link\'', html)
 
 
 if __name__ == "__main__":

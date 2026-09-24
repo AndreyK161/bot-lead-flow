@@ -30,7 +30,7 @@
     .panel { padding: 16px; box-shadow: 0 2px 14px rgba(0,0,0,.04); }
     .quick { display: flex; gap: 7px; overflow-x: auto; margin: 0 -2px 15px; padding: 2px; scrollbar-width: none; }
     .quick::-webkit-scrollbar { display: none; }
-    .chip, .tab {
+    .chip, .tab, .manager-toggle, .all-managers {
       border: 0; color: var(--text); background: var(--accent-soft); font: inherit;
       white-space: nowrap; border-radius: 999px; padding: 8px 12px; cursor: pointer;
     }
@@ -57,6 +57,14 @@
     .kpi strong { display: block; font-size: 29px; line-height: 1.05; color: var(--button); }
     .kpi span { display: block; margin-top: 5px; color: var(--hint); font-size: 13px; }
     .meta { margin: 10px 2px 16px; color: var(--hint); font-size: 12px; }
+    .manager-filter { margin-bottom: 13px; padding: 13px; background: var(--card); border-radius: 14px; }
+    .manager-title { display: flex; align-items: center; gap: 8px; margin-bottom: 10px; }
+    .manager-title strong { flex: 1; }
+    .all-managers { padding: 6px 10px; font-size: 13px; }
+    .all-managers.active, .manager-toggle.active { background: var(--button); color: var(--button-text); }
+    .manager-options { display: flex; flex-wrap: wrap; gap: 7px; }
+    .manager-toggle { padding: 7px 10px; font-size: 13px; }
+    .manager-hint { margin-top: 9px; color: var(--hint); font-size: 11px; }
     .tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; padding: 4px; background: var(--card); border-radius: 14px; }
     .tab { background: transparent; border-radius: 10px; padding: 10px; font-weight: 650; }
     .tab.active { background: var(--button); color: var(--button-text); }
@@ -69,9 +77,17 @@
     .source.open .chevron { transform: rotate(180deg); }
     .details { display: none; padding: 0 14px 12px; border-top: 1px solid var(--line); }
     .source.open .details { display: block; }
-    .stage { display: flex; gap: 10px; padding-top: 10px; color: var(--hint); }
+    .stage-block + .stage-block { border-top: 1px solid var(--line); }
+    .stage { display: flex; gap: 10px; padding: 11px 0; color: var(--hint); cursor: pointer; }
     .stage span:first-child { min-width: 0; flex: 1; overflow-wrap: anywhere; }
     .stage b { color: var(--text); }
+    .stage-arrow { color: var(--hint); transition: transform .2s; }
+    .stage-block.open .stage-arrow { transform: rotate(180deg); }
+    .entity-links { display: none; padding: 0 0 11px 9px; gap: 7px; }
+    .stage-block.open .entity-links { display: grid; }
+    .entity-row { display: flex; flex-wrap: wrap; align-items: center; gap: 5px 10px; }
+    .entity-link { color: var(--button); font-weight: 650; text-decoration: none; }
+    .entity-manager { color: var(--hint); font-size: 11px; }
     .contract-note { margin-top: 10px; color: var(--button); font-weight: 650; }
     .empty { padding: 26px 12px; color: var(--hint); text-align: center; }
     .spinner { display: inline-block; width: 14px; height: 14px; margin-right: 7px; border: 2px solid var(--line); border-top-color: var(--button); border-radius: 50%; vertical-align: -2px; animation: spin .8s linear infinite; }
@@ -105,6 +121,14 @@
         <div class="kpi"><strong id="contracts">0</strong><span>Договоров</span></div>
       </div>
       <div id="meta" class="meta"></div>
+      <section id="manager-filter" class="manager-filter hidden">
+        <div class="manager-title">
+          <strong>Ответственные</strong>
+          <button id="all-managers" class="all-managers active">Все</button>
+        </div>
+        <div id="manager-options" class="manager-options"></div>
+        <div class="manager-hint">Без выбранных менеджеров показывается общая статистика</div>
+      </section>
       <nav class="tabs" aria-label="Раздел отчёта">
         <button class="tab active" data-tab="leads">Лиды <span id="lead-count"></span></button>
         <button class="tab" data-tab="deals">Сделки <span id="deal-count"></span></button>
@@ -123,8 +147,12 @@
       const status = document.getElementById('status');
       const report = document.getElementById('report');
       const list = document.getElementById('source-list');
+      const managerFilter = document.getElementById('manager-filter');
+      const managerOptions = document.getElementById('manager-options');
+      const allManagers = document.getElementById('all-managers');
       let data = null;
       let activeTab = 'leads';
+      const selectedManagers = new Set();
 
       const iso = date => {
         const y = date.getFullYear();
@@ -151,9 +179,50 @@
         if (tg && tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
       }));
 
+      function filteredRows(tab) {
+        return data[tab].map(row => {
+          const stages = row.stages.map(stage => {
+            const items = stage.items.filter(item => !selectedManagers.size || selectedManagers.has(item.manager_id));
+            return {...stage, items, count: items.length};
+          }).filter(stage => stage.count);
+          const items = stages.flatMap(stage => stage.items);
+          return {...row, stages, total: items.length, contracts: items.filter(item => item.contract).length};
+        }).filter(row => row.total);
+      }
+
+      function filteredItems(tab) {
+        return filteredRows(tab).flatMap(row => row.stages.flatMap(stage => stage.items));
+      }
+
+      function renderManagers() {
+        managerOptions.replaceChildren();
+        allManagers.classList.toggle('active', selectedManagers.size === 0);
+        allManagers.setAttribute('aria-pressed', String(selectedManagers.size === 0));
+        data.managers.forEach(manager => {
+          const button = document.createElement('button');
+          button.className = 'manager-toggle';
+          button.classList.toggle('active', selectedManagers.has(manager.id));
+          button.setAttribute('aria-pressed', String(selectedManagers.has(manager.id)));
+          button.textContent = manager.name;
+          button.addEventListener('click', () => {
+            if (selectedManagers.has(manager.id)) selectedManagers.delete(manager.id);
+            else selectedManagers.add(manager.id);
+            render();
+            if (tg && tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
+          });
+          managerOptions.append(button);
+        });
+        managerFilter.classList.toggle('hidden', data.managers.length === 0);
+      }
+
+      allManagers.addEventListener('click', () => {
+        selectedManagers.clear(); render();
+        if (tg && tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
+      });
+
       function renderSources() {
         list.replaceChildren();
-        const rows = data[activeTab];
+        const rows = filteredRows(activeTab);
         if (!rows.length) {
           const empty = document.createElement('div');
           empty.className = 'empty';
@@ -173,10 +242,33 @@
           head.append(name, total, arrow);
           const details = document.createElement('div'); details.className = 'details';
           row.stages.forEach(stage => {
+            const stageBlock = document.createElement('div'); stageBlock.className = 'stage-block';
             const line = document.createElement('div'); line.className = 'stage';
+            line.setAttribute('role', 'button'); line.tabIndex = 0;
             const label = document.createElement('span'); label.textContent = stage.name;
             const count = document.createElement('b'); count.textContent = stage.count;
-            line.append(label, count); details.append(line);
+            const stageArrow = document.createElement('span'); stageArrow.className = 'stage-arrow'; stageArrow.textContent = '⌄';
+            line.append(label, count, stageArrow);
+            const links = document.createElement('div'); links.className = 'entity-links';
+            stage.items.forEach(item => {
+              const entityRow = document.createElement('div'); entityRow.className = 'entity-row';
+              const primary = document.createElement('a'); primary.className = 'entity-link';
+              primary.href = item.url; primary.target = '_blank'; primary.rel = 'noopener noreferrer';
+              primary.textContent = `${activeTab === 'leads' ? 'Лид' : 'Сделка'} №${item.id}`;
+              entityRow.append(primary);
+              if (activeTab === 'leads' && item.deal_id) {
+                const deal = document.createElement('a'); deal.className = 'entity-link';
+                deal.href = item.deal_url; deal.target = '_blank'; deal.rel = 'noopener noreferrer';
+                deal.textContent = `Сделка №${item.deal_id}`; entityRow.append(deal);
+              }
+              const manager = document.createElement('span'); manager.className = 'entity-manager';
+              manager.textContent = item.manager_name; entityRow.append(manager);
+              links.append(entityRow);
+            });
+            const toggleStage = () => stageBlock.classList.toggle('open');
+            line.addEventListener('click', toggleStage);
+            line.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleStage(); } });
+            stageBlock.append(line, links); details.append(stageBlock);
           });
           if (activeTab === 'deals' && row.contracts) {
             const note = document.createElement('div'); note.className = 'contract-note';
@@ -190,13 +282,16 @@
       }
 
       function render() {
-        document.getElementById('converted').textContent = data.totals.converted;
-        document.getElementById('contracts').textContent = data.totals.contracts;
-        document.getElementById('lead-count').textContent = `· ${data.totals.leads}`;
-        document.getElementById('deal-count').textContent = `· ${data.totals.deals}`;
+        const leads = filteredItems('leads');
+        const deals = filteredItems('deals');
+        document.getElementById('converted').textContent = leads.filter(item => item.converted).length;
+        document.getElementById('contracts').textContent = deals.filter(item => item.contract).length;
+        document.getElementById('lead-count').textContent = `· ${leads.length}`;
+        document.getElementById('deal-count').textContent = `· ${deals.length}`;
+        const unique = leads.length + deals.filter(item => item.direct).length;
         document.getElementById('meta').textContent =
-          `${shortDate(data.period.start)}–${shortDate(data.period.end)} · обращений: ${data.totals.unique}`;
-        report.classList.remove('hidden'); renderSources();
+          `${shortDate(data.period.start)}–${shortDate(data.period.end)} · обращений: ${unique}`;
+        report.classList.remove('hidden'); renderManagers(); renderSources();
       }
 
       document.querySelectorAll('[data-tab]').forEach(button => button.addEventListener('click', () => {
@@ -224,7 +319,7 @@
             const body = await response.json().catch(() => ({}));
             throw new Error(body.detail || 'Не удалось построить отчёт');
           }
-          data = await response.json(); activeTab = 'leads';
+          data = await response.json(); activeTab = 'leads'; selectedManagers.clear();
           document.querySelectorAll('[data-tab]').forEach(tab => tab.classList.toggle('active', tab.dataset.tab === activeTab));
           render(); status.textContent = 'Данные сверены с CRM';
           if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
