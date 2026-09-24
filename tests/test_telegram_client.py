@@ -6,6 +6,7 @@ from app.telegram_client import (
     TELEGRAM_TEXT_LIMIT,
     edit_message_text,
     send_telegram_message,
+    set_chat_menu_button,
     split_telegram_html,
 )
 
@@ -71,6 +72,23 @@ class TelegramMessageSplittingTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(call.await_args_list[0].args[1]["reply_markup"], {"inline_keyboard": []})
         self.assertEqual(call.await_args_list[1].args[0], "sendMessage")
         self.assertEqual(call.await_args_list[1].args[1]["reply_markup"], keyboard)
+
+    async def test_sets_native_web_app_menu_button_for_requested_chat(self):
+        call = AsyncMock(return_value={"ok": True, "result": True})
+        with patch("app.telegram_client._call", new=call):
+            await set_chat_menu_button(
+                "https://lead.prav-buro.ru/miniapp",
+                chat_id=1297686797,
+            )
+
+        call.assert_awaited_once_with("setChatMenuButton", {
+            "chat_id": 1297686797,
+            "menu_button": {
+                "type": "web_app",
+                "text": "Отчёты",
+                "web_app": {"url": "https://lead.prav-buro.ru/miniapp"},
+            },
+        })
 
 
 if __name__ == "__main__":

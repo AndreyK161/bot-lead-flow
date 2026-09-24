@@ -29,6 +29,7 @@ from app.telegram_client import (
     edit_message_reply_markup,
     edit_message_text,
     send_telegram_message,
+    set_chat_menu_button,
 )
 
 logging.basicConfig(level=logging.INFO)
@@ -39,6 +40,12 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 
 @asynccontextmanager
 async def lifespan(app):
+    settings = get_settings()
+    for director_id in settings.director_user_id_set:
+        try:
+            await set_chat_menu_button(settings.mini_app_url, chat_id=director_id)
+        except Exception:
+            logger.exception("Failed to configure Mini App menu button for director_id=%s", director_id)
     tasks = [
         asyncio.create_task(deals.polling_loop()),
         asyncio.create_task(manual.recovery_loop()),

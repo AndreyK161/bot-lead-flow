@@ -237,3 +237,22 @@ async def answer_callback_query(
     if text is not None:
         payload["text"] = text
     await _call("answerCallbackQuery", payload)
+
+
+async def set_chat_menu_button(
+    web_app_url: str,
+    *,
+    chat_id: int | str | None = None,
+    text: str = "Отчёты",
+) -> None:
+    """Place a native Mini App button to the left of Telegram's message field."""
+    payload: dict[str, Any] = {
+        "menu_button": {
+            "type": "web_app",
+            "text": text,
+            "web_app": {"url": web_app_url},
+        },
+    }
+    if chat_id is not None:
+        payload["chat_id"] = chat_id
+    await _call("setChatMenuButton", payload)
