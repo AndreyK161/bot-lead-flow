@@ -63,9 +63,12 @@ async def collect_live_period(
     )
     lead_ids = [str(lead["ID"]) for lead in leads]
     contact_ids = [str(lead.get("CONTACT_ID") or "") for lead in leads]
-    explicit_deals, contact_deals, contract_candidates = await asyncio.gather(
+    explicit_deals, contact_deals, period_deals, contract_candidates = await asyncio.gather(
         client.get_deals_by_lead_ids(lead_ids, settings.track_deal_category_id),
         client.get_deals_by_contact_ids(contact_ids, settings.track_deal_category_id),
+        client.get_deals_created_between_full(
+            settings.track_deal_category_id, start_iso, end_iso,
+        ),
         client.get_deals_created_since(
             settings.accompaniment_deal_category_id,
             start_iso,
@@ -77,7 +80,9 @@ async def collect_live_period(
     lead_names = _stage_map(lead_statuses)
     sale_names = _stage_map(sale_stages)
     contract_names = _stage_map(contract_stages)
-    sales_by_id = {str(deal["ID"]): deal for deal in [*explicit_deals, *contact_deals]}
+    sales_by_id = {
+        str(deal["ID"]): deal for deal in [*explicit_deals, *contact_deals, *period_deals]
+    }
     lead_id_set = set(lead_ids)
     related_by_lead: dict[str, list[dict]] = {}
     for deal in sales_by_id.values():
@@ -108,12 +113,12 @@ async def collect_live_period(
     contracts_by_source = outcomes._match_contracts(
         contract_candidates, list(sales_by_id.values()), contract_field,
     )
-    stage_order = [
-        *(f"Лид · {lead_names[str(item.get('STATUS_ID') or '')]}" for item in lead_statuses),
-        *(f"Сделка · {sale_names[str(item.get('STATUS_ID') or '')]}" for item in sale_stages),
-        *(f"Договор · {contract_names[str(item.get('STATUS_ID') or '')]}" for item in contract_stages),
-    ]
-    details: list[dict] = []
+    lead_stage_order = [lead_names[str(item.get("STATUS_ID") or "")] for item in lead_statuses]
+    sale_stage_order = [sale_names[str(item.get("STATUS_ID") or "")] for item in sale_stages]
+    lead_details: list[dict] = []
+    selected_deals: dict[str, dict] = {}
+    selected_lead_by_deal: dict[str, str] = {}
+    lead_by_id = {str(lead["ID"]): lead for lead in leads}
     for lead in leads:
         lead_id = str(lead["ID"])
         deal = outcomes._pick_related_deal(
@@ -121,25 +126,17 @@ async def collect_live_period(
         )
         contract = contracts_by_source.get(str((deal or {}).get("ID") or ""))
         lead_stage_id = str(lead.get("STATUS_ID") or "")
-        if contract:
-            current_type = "Договор"
-            current_stage = contract_names.get(str(contract.get("STAGE_ID") or ""), str(contract.get("STAGE_ID") or "Без стадии"))
-        elif deal:
-            current_type = "Сделка"
-            current_stage = sale_names.get(str(deal.get("STAGE_ID") or ""), str(deal.get("STAGE_ID") or "Без стадии"))
-        else:
-            current_type = "Лид"
-            current_stage = lead_names.get(lead_stage_id, lead_stage_id or "Без стадии")
+        lead_result = "Сконвертирован" if deal else lead_names.get(
+            lead_stage_id, lead_stage_id or "Без стадии",
+        )
         source_id = str(lead.get("SOURCE_ID") or "")
-        details.append({
+        lead_details.append({
             "lead_id": lead_id,
             "created_date": str(lead.get("DATE_CREATE") or "")[:10],
             "source_id": source_id,
             "source_name": source_names.get(source_id, source_id or "Без источника"),
             "lead_stage": lead_names.get(lead_stage_id, lead_stage_id or "Без стадии"),
-            "current_type": current_type,
-            "current_stage": current_stage,
-            "current_label": f"{current_type} · {current_stage}",
+            "result_stage": lead_result,
             "deal_id": str((deal or {}).get("ID") or ""),
             "deal_stage": sale_names.get(str((deal or {}).get("STAGE_ID") or ""), str((deal or {}).get("STAGE_ID") or "")),
             "contract_id": str((contract or {}).get("ID") or ""),
@@ -149,15 +146,61 @@ async def collect_live_period(
             "converted": bool(deal),
             "contract": bool(contract),
         })
+        if deal:
+            deal_id = str(deal["ID"])
+            selected_deals[deal_id] = deal
+            selected_lead_by_deal[deal_id] = lead_id
 
-    observed = {row["current_label"] for row in details}
-    ordered_observed = list(dict.fromkeys(label for label in stage_order if label in observed))
-    ordered_observed.extend(sorted(observed - set(ordered_observed)))
+    for deal in period_deals:
+        selected_deals[str(deal["ID"])] = deal
+
+    deal_details: list[dict] = []
+    for deal_id, deal in selected_deals.items():
+        origin_lead_id = selected_lead_by_deal.get(deal_id)
+        if not origin_lead_id:
+            explicit_lead_id = str(deal.get("LEAD_ID") or "")
+            if explicit_lead_id in lead_by_id:
+                origin_lead_id = explicit_lead_id
+        origin_lead = lead_by_id.get(origin_lead_id or "")
+        contract = contracts_by_source.get(deal_id)
+        source_id = str(deal.get("SOURCE_ID") or (origin_lead or {}).get("SOURCE_ID") or "")
+        sale_stage_id = str(deal.get("STAGE_ID") or "")
+        deal_details.append({
+            "deal_id": deal_id,
+            "created_date": str(deal.get("DATE_CREATE") or "")[:10],
+            "source_id": source_id,
+            "source_name": source_names.get(source_id, source_id or "Без источника"),
+            "stage": sale_names.get(sale_stage_id, sale_stage_id or "Без стадии"),
+            "origin_lead_id": origin_lead_id or "",
+            "converted_from_report_lead": bool(origin_lead_id),
+            "contract_id": str((contract or {}).get("ID") or ""),
+            "contract_stage": contract_names.get(
+                str((contract or {}).get("STAGE_ID") or ""),
+                str((contract or {}).get("STAGE_ID") or ""),
+            ),
+            "contract": bool(contract),
+        })
+
+    observed_lead_stages = {row["result_stage"] for row in lead_details}
+    lead_columns = list(dict.fromkeys(
+        stage for stage in [*lead_stage_order, "Сконвертирован"] if stage in observed_lead_stages
+    ))
+    lead_columns.extend(sorted(observed_lead_stages - set(lead_columns)))
+    observed_sale_stages = {row["stage"] for row in deal_details}
+    deal_columns = list(dict.fromkeys(
+        stage for stage in sale_stage_order if stage in observed_sale_stages
+    ))
+    deal_columns.extend(sorted(observed_sale_stages - set(deal_columns)))
+    direct_deal_count = sum(not item["converted_from_report_lead"] for item in deal_details)
     return {
         "start": start,
         "end": end,
-        "details": details,
-        "stage_columns": ordered_observed,
+        "leads": lead_details,
+        "deals": deal_details,
+        "lead_stage_columns": lead_columns,
+        "deal_stage_columns": deal_columns,
+        "direct_deal_count": direct_deal_count,
+        "unique_total": len(lead_details) + direct_deal_count,
         "checked_at": datetime.now(ZoneInfo(settings.daily_stats_timezone)),
         "portal_domain": urlparse(settings.bitrix_webhook_url).netloc,
     }
@@ -176,77 +219,118 @@ def _style_header(row) -> None:
         cell.alignment = Alignment(horizontal="center", vertical="center", wrap_text=True)
 
 
-def build_workbook(data: dict) -> bytes:
-    workbook = Workbook()
-    summary = workbook.active
-    summary.title = "Сводка"
-    stages = data["stage_columns"]
-    headers = [
-        "Источник", *stages, "Перешли в сделку", "Договоры", "Всего лидов",
-        "Конверсия в сделку", "Конверсия в договор",
-    ]
-    summary.append(headers)
-    _style_header(summary[1])
-
+def _add_matrix_sheet(
+    workbook: Workbook,
+    title: str,
+    items: list[dict],
+    stage_columns: list[str],
+    stage_key: str,
+    total_label: str,
+    *,
+    include_contracts: bool = False,
+) -> None:
+    sheet = workbook.create_sheet(title)
+    headers = ["Источник", *stage_columns]
+    if include_contracts:
+        headers.append("Договоры")
+    headers.append(total_label)
+    sheet.append(headers)
+    _style_header(sheet[1])
     grouped: dict[str, list[dict]] = {}
-    for item in data["details"]:
+    for item in items:
         grouped.setdefault(item["source_name"], []).append(item)
-    for source, items in sorted(grouped.items(), key=lambda pair: (-len(pair[1]), pair[0])):
-        counts = Counter(item["current_label"] for item in items)
-        converted = sum(item["converted"] for item in items)
-        contracts = sum(item["contract"] for item in items)
-        total = len(items)
-        summary.append([
-            _excel_text(source), *(counts.get(stage, 0) for stage in stages),
-            converted, contracts, total, converted / total if total else 0, contracts / total if total else 0,
-        ])
-    totals = data["details"]
-    total_counts = Counter(item["current_label"] for item in totals)
-    converted_total = sum(item["converted"] for item in totals)
-    contract_total = sum(item["contract"] for item in totals)
-    grand_total = len(totals)
-    summary.append([
-        "ИТОГО", *(total_counts.get(stage, 0) for stage in stages), converted_total,
-        contract_total, grand_total, converted_total / grand_total if grand_total else 0,
-        contract_total / grand_total if grand_total else 0,
-    ])
-    for cell in summary[summary.max_row]:
+    for source, source_items in sorted(grouped.items(), key=lambda pair: (-len(pair[1]), pair[0])):
+        counts = Counter(item[stage_key] for item in source_items)
+        row = [_excel_text(source), *(counts.get(stage, 0) for stage in stage_columns)]
+        if include_contracts:
+            row.append(sum(item["contract"] for item in source_items))
+        row.append(len(source_items))
+        sheet.append(row)
+    totals = Counter(item[stage_key] for item in items)
+    total_row = ["ИТОГО", *(totals.get(stage, 0) for stage in stage_columns)]
+    if include_contracts:
+        total_row.append(sum(item["contract"] for item in items))
+    total_row.append(len(items))
+    sheet.append(total_row)
+    for cell in sheet[sheet.max_row]:
         cell.font = Font(bold=True)
         cell.fill = PatternFill("solid", fgColor="D9EAF7")
-    summary.freeze_panes = "B2"
-    summary.auto_filter.ref = summary.dimensions
-    for column in range(len(headers) - 1, len(headers) + 1):
-        for row in range(2, summary.max_row + 1):
-            summary.cell(row, column).number_format = "0.0%"
+    sheet.freeze_panes = "B2"
+    sheet.auto_filter.ref = sheet.dimensions
     for index, header in enumerate(headers, start=1):
-        summary.column_dimensions[get_column_letter(index)].width = min(42, max(12, len(header) + 2))
+        sheet.column_dimensions[get_column_letter(index)].width = min(28, max(11, len(header) + 2))
+
+
+def build_workbook(data: dict) -> bytes:
+    workbook = Workbook()
+    totals = workbook.active
+    totals.title = "Итоги"
+    lead_count = len(data["leads"])
+    converted_count = sum(item["converted"] for item in data["leads"])
+    deal_count = len(data["deals"])
+    contract_count = sum(item["contract"] for item in data["deals"])
+    totals.append(["Показатель", "Количество"])
+    _style_header(totals[1])
+    for label, value in (
+        ("Всего обращений без дублей", data["unique_total"]),
+        ("Лидов", lead_count),
+        ("Прямых сделок", data["direct_deal_count"]),
+        ("Лидов сконвертировано", converted_count),
+        ("Всего сделок", deal_count),
+        ("Договоров", contract_count),
+    ):
+        totals.append([label, value])
+    totals.append([])
+    totals.append([
+        "Правило подсчёта",
+        "Всего обращений = лиды + прямые сделки. Сделка из лида повторно в общий итог не входит.",
+    ])
+    totals.column_dimensions["A"].width = 34
+    totals.column_dimensions["B"].width = 90
+    totals["B9"].alignment = Alignment(wrap_text=True)
+
+    _add_matrix_sheet(
+        workbook, "Лиды", data["leads"], data["lead_stage_columns"], "result_stage", "Всего лидов",
+    )
+    _add_matrix_sheet(
+        workbook, "Сделки", data["deals"], data["deal_stage_columns"], "stage", "Всего сделок",
+        include_contracts=True,
+    )
 
     detail = workbook.create_sheet("Детализация")
     detail_headers = [
-        "Дата создания", "ID лида", "Источник", "Текущий объект", "Текущая стадия",
-        "ID сделки", "Стадия сделки", "ID договора", "Стадия сопровождения",
+        "Тип", "Дата создания", "ID", "Источник", "Стадия/результат",
+        "Исходный лид", "Связанная сделка", "Договор", "Стадия сопровождения",
     ]
     detail.append(detail_headers)
     _style_header(detail[1])
     portal = data["portal_domain"]
-    for item in data["details"]:
+    for item in data["leads"]:
         detail.append([
-            item["created_date"], item["lead_id"], _excel_text(item["source_name"]),
-            item["current_type"], _excel_text(item["current_stage"]), item["deal_id"],
-            _excel_text(item["deal_stage"]), item["contract_id"], _excel_text(item["contract_stage"]),
+            "Лид", item["created_date"], item["lead_id"], _excel_text(item["source_name"]),
+            _excel_text(item["result_stage"]), item["lead_id"], item["deal_id"],
+            item["contract_id"], _excel_text(item["contract_stage"]),
         ])
-        row = detail.max_row
-        detail.cell(row, 2).hyperlink = f"https://{portal}/crm/lead/details/{item['lead_id']}/"
-        detail.cell(row, 2).style = "Hyperlink"
-        if item["deal_id"]:
-            detail.cell(row, 6).hyperlink = f"https://{portal}/crm/deal/details/{item['deal_id']}/"
-            detail.cell(row, 6).style = "Hyperlink"
-        if item["contract_id"]:
-            detail.cell(row, 8).hyperlink = f"https://{portal}/crm/deal/details/{item['contract_id']}/"
-            detail.cell(row, 8).style = "Hyperlink"
+    for item in data["deals"]:
+        detail.append([
+            "Сделка", item["created_date"], item["deal_id"], _excel_text(item["source_name"]),
+            _excel_text(item["stage"]), item["origin_lead_id"], item["deal_id"],
+            item["contract_id"], _excel_text(item["contract_stage"]),
+        ])
+    for row in range(2, detail.max_row + 1):
+        entity_type = detail.cell(row, 1).value
+        entity_id = detail.cell(row, 3).value
+        path = "lead" if entity_type == "Лид" else "deal"
+        detail.cell(row, 3).hyperlink = f"https://{portal}/crm/{path}/details/{entity_id}/"
+        detail.cell(row, 3).style = "Hyperlink"
+        for column, linked_path in ((6, "lead"), (7, "deal"), (8, "deal")):
+            linked_id = detail.cell(row, column).value
+            if linked_id:
+                detail.cell(row, column).hyperlink = f"https://{portal}/crm/{linked_path}/details/{linked_id}/"
+                detail.cell(row, column).style = "Hyperlink"
     detail.freeze_panes = "A2"
     detail.auto_filter.ref = detail.dimensions
-    widths = [15, 12, 28, 18, 32, 12, 30, 14, 32]
+    widths = [12, 15, 12, 28, 30, 14, 16, 14, 30]
     for index, width in enumerate(widths, start=1):
         detail.column_dimensions[get_column_letter(index)].width = width
 
@@ -256,18 +340,21 @@ def build_workbook(data: dict) -> bytes:
 
 
 def build_caption(data: dict) -> str:
-    details = data["details"]
-    converted = sum(item["converted"] for item in details)
-    contracts = sum(item["contract"] for item in details)
-    total = len(details)
-    converted_rate = converted / total * 100 if total else 0
-    contract_rate = contracts / total * 100 if total else 0
+    leads = data["leads"]
+    deals = data["deals"]
+    converted = sum(item["converted"] for item in leads)
+    contracts = sum(item["contract"] for item in deals)
+    lead_total = len(leads)
+    converted_rate = converted / lead_total * 100 if lead_total else 0
+    contract_rate = contracts / data["unique_total"] * 100 if data["unique_total"] else 0
     return (
         f"📊 <b>{data['start']:%d.%m.%Y}–{data['end']:%d.%m.%Y}</b>\n"
-        f"Лидов: <b>{total}</b>\n"
+        f"Обращений без дублей: <b>{data['unique_total']}</b>\n"
+        f"Лидов: <b>{lead_total}</b> · прямых сделок: <b>{data['direct_deal_count']}</b>\n"
         f"Перешли в сделку: <b>{converted}</b> ({converted_rate:.1f}%)\n"
+        f"Всего сделок: <b>{len(deals)}</b>\n"
         f"Договоры: <b>{contracts}</b> ({contract_rate:.1f}%)\n"
-        f"Источников: <b>{len({item['source_name'] for item in details})}</b>\n"
+        f"Источников: <b>{len({item['source_name'] for item in [*leads, *deals]})}</b>\n"
         f"<i>Сверено с Bitrix: {data['checked_at']:%d.%m.%Y %H:%M}</i>"
     )
 

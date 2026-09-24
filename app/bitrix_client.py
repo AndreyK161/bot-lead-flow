@@ -241,6 +241,25 @@ class BitrixClient:
             "select": select,
         })
 
+    async def get_deals_created_between_full(
+        self,
+        category_id: str,
+        start_iso: str,
+        end_iso: str,
+        *,
+        extra_fields: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        select = list(dict.fromkeys(DEAL_SELECT_FIELDS + list(extra_fields or [])))
+        return await self._call_all("crm.deal.list", {
+            "order": {"DATE_CREATE": "ASC", "ID": "ASC"},
+            "filter": {
+                "CATEGORY_ID": str(category_id),
+                ">=DATE_CREATE": start_iso,
+                "<DATE_CREATE": end_iso,
+            },
+            "select": select,
+        })
+
     async def get_category_deals_after_id(
         self, category_id: str, after_id: str | int, *, extra_fields: list[str] | None = None,
     ) -> list[dict[str, Any]]:

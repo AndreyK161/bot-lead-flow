@@ -44,13 +44,17 @@ class LivePeriodReportTests(unittest.IsolatedAsyncioTestCase):
         client.get_sources.return_value = [
             {"STATUS_ID": "WEB", "NAME": "Сайт"},
             {"STATUS_ID": "TG", "NAME": "Телеграм"},
+            {"STATUS_ID": "VK", "NAME": "ВКонтакте"},
         ]
         client.get_lead_statuses.return_value = [
             {"STATUS_ID": "IN_PROCESS", "NAME": "Недозвон"},
             {"STATUS_ID": "CONVERTED", "NAME": "Качественный лид"},
         ]
         client.get_deal_stages.side_effect = [
-            [{"STATUS_ID": "WON", "NAME": "Сделка успешна"}],
+            [
+                {"STATUS_ID": "NEW", "NAME": "Не обработан"},
+                {"STATUS_ID": "WON", "NAME": "Сделка успешна"},
+            ],
             [{"STATUS_ID": "C2:NEW", "NAME": "Новый договор"}],
         ]
         sale = {
@@ -59,6 +63,10 @@ class LivePeriodReportTests(unittest.IsolatedAsyncioTestCase):
         }
         client.get_deals_by_lead_ids.return_value = [sale]
         client.get_deals_by_contact_ids.return_value = [sale]
+        client.get_deals_created_between_full.return_value = [sale, {
+            "ID": "21", "LEAD_ID": None, "CONTACT_ID": "900", "CATEGORY_ID": "0",
+            "SOURCE_ID": "VK", "STAGE_ID": "NEW", "DATE_CREATE": "2026-09-06T10:00:00+03:00",
+        }]
         client.get_deals_created_since.return_value = [{
             "ID": "30", "CONTACT_ID": "500", "CATEGORY_ID": "2", "STAGE_ID": "C2:NEW",
             "DATE_CREATE": "2026-09-05T10:00:00+03:00",
@@ -69,29 +77,33 @@ class LivePeriodReportTests(unittest.IsolatedAsyncioTestCase):
             date(2026, 9, 1), date(2026, 9, 23), client=client,
         )
 
-        self.assertEqual(len(data["details"]), 2)
-        contract = next(item for item in data["details"] if item["lead_id"] == "10")
+        self.assertEqual(len(data["leads"]), 2)
+        self.assertEqual(len(data["deals"]), 2)
+        self.assertEqual(data["unique_total"], 3)
+        self.assertEqual(data["direct_deal_count"], 1)
+        contract = next(item for item in data["leads"] if item["lead_id"] == "10")
         self.assertEqual(contract["source_name"], "Сайт")
         self.assertEqual(contract["deal_id"], "20")
         self.assertEqual(contract["contract_id"], "30")
-        self.assertEqual(contract["current_label"], "Договор · Новый договор")
-        self.assertIn("Лид · Недозвон", data["stage_columns"])
+        self.assertEqual(contract["result_stage"], "Сконвертирован")
+        self.assertIn("Недозвон", data["lead_stage_columns"])
 
         content = period_reports.build_workbook(data)
         workbook = load_workbook(BytesIO(content), data_only=False)
-        self.assertEqual(workbook.sheetnames, ["Сводка", "Детализация"])
-        summary = workbook["Сводка"]
-        headers = [cell.value for cell in summary[1]]
-        self.assertEqual(headers[-5:], [
-            "Перешли в сделку", "Договоры", "Всего лидов",
-            "Конверсия в сделку", "Конверсия в договор",
-        ])
-        site_row = next(row for row in summary.iter_rows(values_only=True) if row[0] == "Сайт")
-        self.assertEqual(site_row[headers.index("Договоры")], 1)
-        self.assertEqual(site_row[headers.index("Всего лидов")], 1)
+        self.assertEqual(workbook.sheetnames, ["Итоги", "Лиды", "Сделки", "Детализация"])
+        lead_sheet = workbook["Лиды"]
+        lead_headers = [cell.value for cell in lead_sheet[1]]
+        self.assertEqual(lead_headers[-1], "Всего лидов")
+        site_row = next(row for row in lead_sheet.iter_rows(values_only=True) if row[0] == "Сайт")
+        self.assertEqual(site_row[lead_headers.index("Сконвертирован")], 1)
+        deal_sheet = workbook["Сделки"]
+        deal_headers = [cell.value for cell in deal_sheet[1]]
+        vk_row = next(row for row in deal_sheet.iter_rows(values_only=True) if row[0] == "ВКонтакте")
+        self.assertEqual(vk_row[deal_headers.index("Не обработан")], 1)
+        self.assertEqual(deal_headers[-2:], ["Договоры", "Всего сделок"])
         detail = workbook["Детализация"]
-        self.assertEqual(detail.max_row, 3)
-        self.assertIsNotNone(detail["B2"].hyperlink)
+        self.assertEqual(detail.max_row, 5)
+        self.assertIsNotNone(detail["C2"].hyperlink)
 
     def test_excel_escapes_formula_like_source_names(self):
         data = {
@@ -99,16 +111,19 @@ class LivePeriodReportTests(unittest.IsolatedAsyncioTestCase):
             "end": date(2026, 9, 1),
             "checked_at": None,
             "portal_domain": "example.bitrix24.ru",
-            "stage_columns": ["Лид · Не обработан"],
-            "details": [{
+            "lead_stage_columns": ["Не обработан"],
+            "deal_stage_columns": [],
+            "direct_deal_count": 0,
+            "unique_total": 1,
+            "deals": [],
+            "leads": [{
                 "lead_id": "1", "created_date": "2026-09-01", "source_name": "=FORMULA",
-                "current_type": "Лид", "current_stage": "Не обработан",
-                "current_label": "Лид · Не обработан", "deal_id": "", "deal_stage": "",
+                "result_stage": "Не обработан", "deal_id": "", "deal_stage": "",
                 "contract_id": "", "contract_stage": "", "converted": False, "contract": False,
             }],
         }
         workbook = load_workbook(BytesIO(period_reports.build_workbook(data)), data_only=False)
-        self.assertEqual(workbook["Сводка"]["A2"].value, "'=FORMULA")
+        self.assertEqual(workbook["Лиды"]["A2"].value, "'=FORMULA")
 
 
 if __name__ == "__main__":
