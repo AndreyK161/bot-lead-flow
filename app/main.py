@@ -11,7 +11,7 @@ from urllib.parse import urlparse
 from fastapi import FastAPI, HTTPException, Request, status
 
 from app import deals, journal, manual, miniapp, outcomes, period_reports, reconcile, reports, stats, store
-from app.bitrix_client import BitrixApiError, BitrixClient
+from app.bitrix_client import BitrixApiError, BitrixClient, close_http_client
 from app.config import get_settings
 from app.formatter import (
     build_action_keyboard,
@@ -60,6 +60,7 @@ async def lifespan(app):
     for task in tasks:
         with suppress(asyncio.CancelledError):
             await task
+    await close_http_client()
 
 
 app = FastAPI(title="bot-lead-flow", lifespan=lifespan)

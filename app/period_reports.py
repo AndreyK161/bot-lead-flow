@@ -6,6 +6,7 @@ import logging
 from collections import Counter
 from datetime import date, datetime, time, timedelta
 from io import BytesIO
+from typing import Callable
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
@@ -47,10 +48,13 @@ async def collect_live_period(
     end: date,
     *,
     client: BitrixClient | None = None,
+    progress: Callable[[int, str], None] | None = None,
 ) -> dict:
     """Build a fresh lead cohort from Bitrix, independent of local tracking history."""
     settings = get_settings()
     client = client or BitrixClient()
+    notify = progress or (lambda _percent, _message: None)
+    notify(5, "Подключаюсь к Bitrix")
     start_iso, end_iso = _iso_bounds(start, end, settings.daily_stats_timezone)
     contract_field = settings.contract_source_url_field
 
@@ -62,6 +66,7 @@ async def collect_live_period(
         client.get_deal_stages(settings.accompaniment_deal_category_id),
         client.get_department_users(settings.sales_department_id),
     )
+    notify(25, f"Загружено лидов: {len(leads)}")
     lead_ids = [str(lead["ID"]) for lead in leads]
     contact_ids = [str(lead.get("CONTACT_ID") or "") for lead in leads]
     explicit_deals, contact_deals, period_deals, contract_candidates = await asyncio.gather(
@@ -76,6 +81,7 @@ async def collect_live_period(
             extra_fields=[contract_field],
         ),
     )
+    notify(65, f"Загружены связанные сделки: {len(period_deals)}")
 
     source_names = _stage_map(sources)
     lead_names = _stage_map(lead_statuses)
@@ -114,6 +120,7 @@ async def collect_live_period(
     contracts_by_source = outcomes._match_contracts(
         contract_candidates, list(sales_by_id.values()), contract_field,
     )
+    notify(75, "Сопоставляю договоры и обращения")
     manager_ids = sorted({
         str(item.get("ASSIGNED_BY_ID") or "")
         for item in [*leads, *sales_by_id.values()]
@@ -134,6 +141,7 @@ async def collect_live_period(
         }
         for user in sales_users
     ]
+    notify(85, "Группирую данные по ответственным")
     lead_stage_order = [lead_names[str(item.get("STATUS_ID") or "")] for item in lead_statuses]
     sale_stage_order = [sale_names[str(item.get("STATUS_ID") or "")] for item in sale_stages]
     lead_details: list[dict] = []
@@ -219,6 +227,7 @@ async def collect_live_period(
     ))
     deal_columns.extend(sorted(observed_sale_stages - set(deal_columns)))
     direct_deal_count = sum(not item["converted_from_report_lead"] for item in deal_details)
+    notify(96, "Формирую итоговую статистику")
     return {
         "start": start,
         "end": end,

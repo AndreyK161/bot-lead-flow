@@ -36,6 +36,7 @@
     }
     .chip:active, .tab:active, .source:active { transform: scale(.985); }
     .dates { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .period-preview { margin-top: 10px; color: var(--hint); text-align: center; font-size: 12px; }
     label { display: block; color: var(--hint); font-size: 12px; font-weight: 600; }
     input[type=date] {
       display: block; width: 100%; margin-top: 5px; padding: 11px 10px;
@@ -50,6 +51,10 @@
     .build:disabled { opacity: .6; cursor: default; }
     #status { min-height: 20px; margin-top: 12px; color: var(--hint); text-align: center; font-size: 13px; }
     #status.error { color: #d44; }
+    .progress-wrap { margin-top: 12px; }
+    .progress-track { height: 7px; overflow: hidden; border-radius: 999px; background: var(--line); }
+    .progress-fill { width: 0; height: 100%; border-radius: inherit; background: var(--button); transition: width .35s ease; }
+    .progress-label { margin-top: 7px; color: var(--hint); text-align: center; font-size: 12px; }
     #report { margin-top: 18px; }
     .hidden { display: none !important; }
     .summary { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
@@ -111,6 +116,7 @@
         <label>Дата начала<input id="start" type="date" required></label>
         <label>Дата окончания<input id="end" type="date" required></label>
       </div>
+      <div id="period-preview" class="period-preview"></div>
       <button id="build" class="build">Показать отчёт</button>
       <div id="status" role="status"></div>
     </section>
@@ -144,6 +150,7 @@
       const startInput = document.getElementById('start');
       const endInput = document.getElementById('end');
       const buildButton = document.getElementById('build');
+      const periodPreview = document.getElementById('period-preview');
       const status = document.getElementById('status');
       const report = document.getElementById('report');
       const list = document.getElementById('source-list');
@@ -162,9 +169,23 @@
       };
       const localDate = value => new Date(`${value}T00:00:00`);
       const shortDate = value => localDate(value).toLocaleDateString('ru-RU');
-      const setDates = (start, end) => { startInput.value = iso(start); endInput.value = iso(end); };
+      const longDate = value => localDate(value).toLocaleDateString('ru-RU', {day: 'numeric', month: 'long', year: 'numeric'});
+      const updatePeriodPreview = () => {
+        periodPreview.textContent = startInput.value && endInput.value
+          ? `Выбрано: ${longDate(startInput.value)} — ${longDate(endInput.value)}` : '';
+      };
+      const setDates = (start, end) => {
+        startInput.value = iso(start); endInput.value = iso(end); updatePeriodPreview();
+      };
       const now = new Date();
       setDates(new Date(now.getFullYear(), now.getMonth(), 1), now);
+      startInput.addEventListener('change', updatePeriodPreview);
+      endInput.addEventListener('change', updatePeriodPreview);
+
+      const confirmLargePeriod = message => new Promise(resolve => {
+        if (tg && tg.showConfirm) tg.showConfirm(message, resolve);
+        else resolve(window.confirm(message));
+      });
 
       document.querySelectorAll('[data-period]').forEach(button => button.addEventListener('click', () => {
         const today = new Date();
@@ -294,6 +315,46 @@
         report.classList.remove('hidden'); renderManagers(); renderSources();
       }
 
+      function showProgress(percent, message) {
+        status.className = '';
+        status.replaceChildren();
+        const wrap = document.createElement('div'); wrap.className = 'progress-wrap';
+        const track = document.createElement('div'); track.className = 'progress-track';
+        const fill = document.createElement('div'); fill.className = 'progress-fill';
+        fill.style.width = `${Math.max(1, Math.min(100, percent))}%`;
+        const label = document.createElement('div'); label.className = 'progress-label';
+        label.textContent = `${message} · ${percent}%`;
+        track.append(fill); wrap.append(track, label); status.append(wrap);
+      }
+
+      const requestHeaders = () => ({'X-Telegram-Init-Data': tg ? tg.initData : ''});
+      const wait = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
+
+      async function buildReport(params) {
+        const started = await fetch(`/api/miniapp/report/jobs?${params}`, {
+          method: 'POST', headers: requestHeaders()
+        });
+        if (!started.ok) {
+          const body = await started.json().catch(() => ({}));
+          throw new Error(body.detail || 'Не удалось запустить отчёт');
+        }
+        const {job_id: jobId} = await started.json();
+        while (true) {
+          const response = await fetch(`/api/miniapp/report/jobs/${encodeURIComponent(jobId)}`, {
+            headers: requestHeaders()
+          });
+          if (!response.ok) {
+            const body = await response.json().catch(() => ({}));
+            throw new Error(body.detail || 'Не удалось получить состояние отчёта');
+          }
+          const job = await response.json();
+          showProgress(job.progress, job.message);
+          if (job.status === 'done') return job.result;
+          if (job.status === 'error') throw new Error(job.message || 'Не удалось построить отчёт');
+          await wait(750);
+        }
+      }
+
       document.querySelectorAll('[data-tab]').forEach(button => button.addEventListener('click', () => {
         activeTab = button.dataset.tab;
         document.querySelectorAll('[data-tab]').forEach(tab => tab.classList.toggle('active', tab === button));
@@ -306,22 +367,20 @@
         if (!startInput.value || !endInput.value || startInput.value > endInput.value) {
           status.className = 'error'; status.textContent = 'Проверьте выбранные даты'; return;
         }
+        const periodDays = Math.round((localDate(endInput.value) - localDate(startInput.value)) / 86400000) + 1;
+        if (periodDays > 92) {
+          const confirmed = await confirmLargePeriod(
+            `Выбран большой период: ${longDate(startInput.value)} — ${longDate(endInput.value)} (${periodDays} дней). Отчёт может строиться несколько минут. Продолжить?`
+          );
+          if (!confirmed) return;
+        }
         buildButton.disabled = true;
-        status.replaceChildren();
-        const spinner = document.createElement('span'); spinner.className = 'spinner';
-        status.append(spinner, document.createTextNode('Сверяю данные с Bitrix…'));
+        showProgress(1, 'Готовлю запрос');
         try {
           const params = new URLSearchParams({start: startInput.value, end: endInput.value});
-          const response = await fetch(`/api/miniapp/report?${params}`, {
-            headers: {'X-Telegram-Init-Data': tg ? tg.initData : ''}
-          });
-          if (!response.ok) {
-            const body = await response.json().catch(() => ({}));
-            throw new Error(body.detail || 'Не удалось построить отчёт');
-          }
-          data = await response.json(); activeTab = 'leads'; selectedManagers.clear();
+          data = await buildReport(params); activeTab = 'leads'; selectedManagers.clear();
           document.querySelectorAll('[data-tab]').forEach(tab => tab.classList.toggle('active', tab.dataset.tab === activeTab));
-          render(); status.textContent = 'Данные сверены с CRM';
+          render(); status.textContent = 'Данные сверены с CRM · 100%';
           if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
         } catch (error) {
           status.className = 'error'; status.textContent = error.message;

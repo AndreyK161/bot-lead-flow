@@ -8,6 +8,26 @@ import httpx
 
 from app.config import get_settings
 
+_shared_http_client: httpx.AsyncClient | None = None
+
+
+def _http_client() -> httpx.AsyncClient:
+    """Reuse TLS connections across Bitrix REST calls and report pages."""
+    global _shared_http_client
+    if _shared_http_client is None or _shared_http_client.is_closed:
+        _shared_http_client = httpx.AsyncClient(
+            timeout=30.0,
+            limits=httpx.Limits(max_connections=20, max_keepalive_connections=10),
+        )
+    return _shared_http_client
+
+
+async def close_http_client() -> None:
+    global _shared_http_client
+    if _shared_http_client is not None and not _shared_http_client.is_closed:
+        await _shared_http_client.aclose()
+    _shared_http_client = None
+
 # Поля, которые нужны для карточки лида. Явный список экономит трафик
 # и не тянет лишнее из CRM.
 LEAD_SELECT_FIELDS = [
@@ -55,9 +75,8 @@ class BitrixClient:
 
     async def _call_payload(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         url = self._base_url + method
-        async with httpx.AsyncClient(timeout=15.0) as client:
-            response = await client.post(url, json=params or {})
-            response.raise_for_status()
+        response = await _http_client().post(url, json=params or {})
+        response.raise_for_status()
         payload = response.json()
         if "error" in payload:
             raise BitrixApiError(f"{method}: {payload.get('error')} — {payload.get('error_description')}")
