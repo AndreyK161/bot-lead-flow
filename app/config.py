@@ -62,6 +62,7 @@ class Settings(BaseSettings):
     outcome_sync_time: str = "03:00"
     accompaniment_deal_category_id: str = "2"
     contract_source_url_field: str = "UF_CRM_1775217002"
+    mini_app_url: str = "https://lead.prav-buro.ru/miniapp"
 
 
 @lru_cache

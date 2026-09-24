@@ -228,6 +228,26 @@ class TelegramWebhookAuthTests(WebhookTestCase):
         self.assertEqual(self.send_message.call_args.kwargs['chat_id'], director_id)
         self.assertIn('Excel', self.send_message.call_args.args[0])
 
+    async def test_app_command_sends_mini_app_only_to_test_director(self):
+        director_id = 1297686797
+        self.settings.director_user_id_set = {director_id}
+        self.settings.mini_app_url = 'https://lead.prav-buro.ru/miniapp'
+        request = json_request(
+            headers={'X-Telegram-Bot-Api-Secret-Token': 'secret'},
+            message={
+                'chat': {'id': director_id, 'type': 'private'},
+                'from': {'id': director_id},
+                'text': '/app',
+            },
+        )
+
+        await main.telegram_webhook(request)
+
+        self.send_message.assert_awaited_once()
+        self.assertEqual(self.send_message.call_args.kwargs['chat_id'], director_id)
+        button = self.send_message.call_args.kwargs['reply_markup']['inline_keyboard'][0][0]
+        self.assertEqual(button['web_app']['url'], 'https://lead.prav-buro.ru/miniapp')
+
     async def test_manual_callback_is_acknowledged_before_processing(self):
         callback={'id':'cb-manual','from':{'id':100},'data':'ms:abc:tg','message':{'chat':{'id':100},'message_id':1}}
         request=json_request(headers={'X-Telegram-Bot-Api-Secret-Token':'secret'},update_id=78,callback_query=callback)

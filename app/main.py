@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request, status
 
-from app import deals, journal, manual, outcomes, period_reports, reconcile, reports, stats, store
+from app import deals, journal, manual, miniapp, outcomes, period_reports, reconcile, reports, stats, store
 from app.bitrix_client import BitrixApiError, BitrixClient
 from app.config import get_settings
 from app.formatter import (
@@ -56,6 +56,16 @@ async def lifespan(app):
 
 
 app = FastAPI(title="bot-lead-flow", lifespan=lifespan)
+app.include_router(miniapp.router)
+
+
+def _mini_app_keyboard(settings) -> dict:
+    return {
+        "inline_keyboard": [[{
+            "text": "📊 Открыть отчёты",
+            "web_app": {"url": getattr(settings, "mini_app_url", "https://lead.prav-buro.ru/miniapp")},
+        }]],
+    }
 
 
 def _portal_domain(webhook_url: str) -> str | None:
@@ -234,13 +244,26 @@ async def _handle_message(message: dict, settings, update_id: int) -> None:
         if user_id in settings.director_user_id_set:
             help_text += (
                 "\n\nДля ручной заявки отправьте номер телефона."
+                "\n/app — интерактивные отчёты"
                 "\n/period ДД.ММ.ГГГГ - ДД.ММ.ГГГГ — текущий результат обращений"
                 "\n/source — настроить источники\n/cancel — отменить ввод заявки"
             )
-        await send_telegram_message(help_text, chat_id=user_id)
+        await send_telegram_message(
+            help_text,
+            chat_id=user_id,
+            reply_markup=_mini_app_keyboard(settings) if user_id in settings.director_user_id_set else None,
+        )
         return
 
     command = text.split()[0].split("@")[0].lower() if text else ""
+    if command == "/app" and user_id in settings.director_user_id_set:
+        await send_telegram_message(
+            "📊 Выберите период и посмотрите актуальные стадии обращений.",
+            chat_id=user_id,
+            reply_markup=_mini_app_keyboard(settings),
+        )
+        return
+
     if command == "/period" and user_id in settings.director_user_id_set:
         period = outcomes.parse_period(text)
         if not period:

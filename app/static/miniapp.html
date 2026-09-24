@@ -1,0 +1,239 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <title>Отчёт по обращениям</title>
+  <script src="https://telegram.org/js/telegram-web-app.js"></script>
+  <style>
+    :root {
+      color-scheme: light dark;
+      --bg: var(--tg-theme-bg-color, #f4f6f8);
+      --card: var(--tg-theme-secondary-bg-color, #fff);
+      --text: var(--tg-theme-text-color, #17212b);
+      --hint: var(--tg-theme-hint-color, #7d8b99);
+      --button: var(--tg-theme-button-color, #2481cc);
+      --button-text: var(--tg-theme-button-text-color, #fff);
+      --line: color-mix(in srgb, var(--hint) 22%, transparent);
+      --accent-soft: color-mix(in srgb, var(--button) 12%, var(--card));
+    }
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
+      font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+      -webkit-font-smoothing: antialiased;
+    }
+    main { max-width: 680px; margin: 0 auto; padding: 22px 16px calc(32px + env(safe-area-inset-bottom)); }
+    h1 { margin: 0 0 5px; font-size: 25px; letter-spacing: -.4px; }
+    .subtitle { margin: 0 0 20px; color: var(--hint); }
+    .panel, .source, .kpi { background: var(--card); border-radius: 16px; }
+    .panel { padding: 16px; box-shadow: 0 2px 14px rgba(0,0,0,.04); }
+    .quick { display: flex; gap: 7px; overflow-x: auto; margin: 0 -2px 15px; padding: 2px; scrollbar-width: none; }
+    .quick::-webkit-scrollbar { display: none; }
+    .chip, .tab {
+      border: 0; color: var(--text); background: var(--accent-soft); font: inherit;
+      white-space: nowrap; border-radius: 999px; padding: 8px 12px; cursor: pointer;
+    }
+    .chip:active, .tab:active, .source:active { transform: scale(.985); }
+    .dates { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    label { display: block; color: var(--hint); font-size: 12px; font-weight: 600; }
+    input[type=date] {
+      display: block; width: 100%; margin-top: 5px; padding: 11px 10px;
+      color: var(--text); background: var(--bg); border: 1px solid var(--line);
+      border-radius: 11px; font: inherit; font-weight: 600; min-height: 44px;
+    }
+    .build {
+      display: block; min-width: 190px; margin: 18px auto 0; padding: 12px 20px;
+      border: 0; border-radius: 12px; background: var(--button); color: var(--button-text);
+      font: inherit; font-weight: 700; cursor: pointer;
+    }
+    .build:disabled { opacity: .6; cursor: default; }
+    #status { min-height: 20px; margin-top: 12px; color: var(--hint); text-align: center; font-size: 13px; }
+    #status.error { color: #d44; }
+    #report { margin-top: 18px; }
+    .hidden { display: none !important; }
+    .summary { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
+    .kpi { padding: 15px; border: 1px solid var(--line); }
+    .kpi strong { display: block; font-size: 29px; line-height: 1.05; color: var(--button); }
+    .kpi span { display: block; margin-top: 5px; color: var(--hint); font-size: 13px; }
+    .meta { margin: 10px 2px 16px; color: var(--hint); font-size: 12px; }
+    .tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; padding: 4px; background: var(--card); border-radius: 14px; }
+    .tab { background: transparent; border-radius: 10px; padding: 10px; font-weight: 650; }
+    .tab.active { background: var(--button); color: var(--button-text); }
+    .list { margin-top: 11px; display: grid; gap: 8px; }
+    .source { width: 100%; border: 1px solid var(--line); padding: 0; color: var(--text); text-align: left; overflow: hidden; }
+    .source-head { display: flex; align-items: center; gap: 9px; padding: 14px; cursor: pointer; }
+    .source-name { min-width: 0; flex: 1; font-weight: 650; overflow-wrap: anywhere; }
+    .source-total { min-width: 31px; padding: 3px 8px; border-radius: 999px; background: var(--accent-soft); color: var(--button); text-align: center; font-weight: 750; }
+    .chevron { color: var(--hint); transition: transform .2s; }
+    .source.open .chevron { transform: rotate(180deg); }
+    .details { display: none; padding: 0 14px 12px; border-top: 1px solid var(--line); }
+    .source.open .details { display: block; }
+    .stage { display: flex; gap: 10px; padding-top: 10px; color: var(--hint); }
+    .stage span:first-child { min-width: 0; flex: 1; overflow-wrap: anywhere; }
+    .stage b { color: var(--text); }
+    .contract-note { margin-top: 10px; color: var(--button); font-weight: 650; }
+    .empty { padding: 26px 12px; color: var(--hint); text-align: center; }
+    .spinner { display: inline-block; width: 14px; height: 14px; margin-right: 7px; border: 2px solid var(--line); border-top-color: var(--button); border-radius: 50%; vertical-align: -2px; animation: spin .8s linear infinite; }
+    @keyframes spin { to { transform: rotate(360deg); } }
+    @media (max-width: 360px) { .dates { grid-template-columns: 1fr; } }
+  </style>
+</head>
+<body>
+  <main>
+    <h1>Отчёт по обращениям</h1>
+    <p class="subtitle">Текущее состояние лидов и сделок из выбранного периода</p>
+
+    <section class="panel">
+      <div class="quick" aria-label="Быстрый выбор периода">
+        <button class="chip" data-period="today">Сегодня</button>
+        <button class="chip" data-period="7days">7 дней</button>
+        <button class="chip" data-period="month">Этот месяц</button>
+        <button class="chip" data-period="previous">Прошлый месяц</button>
+      </div>
+      <div class="dates">
+        <label>Дата начала<input id="start" type="date" required></label>
+        <label>Дата окончания<input id="end" type="date" required></label>
+      </div>
+      <button id="build" class="build">Показать отчёт</button>
+      <div id="status" role="status"></div>
+    </section>
+
+    <section id="report" class="hidden" aria-live="polite">
+      <div class="summary">
+        <div class="kpi"><strong id="converted">0</strong><span>Сконвертировано в сделки</span></div>
+        <div class="kpi"><strong id="contracts">0</strong><span>Договоров</span></div>
+      </div>
+      <div id="meta" class="meta"></div>
+      <nav class="tabs" aria-label="Раздел отчёта">
+        <button class="tab active" data-tab="leads">Лиды <span id="lead-count"></span></button>
+        <button class="tab" data-tab="deals">Сделки <span id="deal-count"></span></button>
+      </nav>
+      <div id="source-list" class="list"></div>
+    </section>
+  </main>
+
+  <script>
+    (() => {
+      const tg = window.Telegram && window.Telegram.WebApp;
+      if (tg) { tg.ready(); tg.expand(); }
+      const startInput = document.getElementById('start');
+      const endInput = document.getElementById('end');
+      const buildButton = document.getElementById('build');
+      const status = document.getElementById('status');
+      const report = document.getElementById('report');
+      const list = document.getElementById('source-list');
+      let data = null;
+      let activeTab = 'leads';
+
+      const iso = date => {
+        const y = date.getFullYear();
+        const m = String(date.getMonth() + 1).padStart(2, '0');
+        const d = String(date.getDate()).padStart(2, '0');
+        return `${y}-${m}-${d}`;
+      };
+      const localDate = value => new Date(`${value}T00:00:00`);
+      const shortDate = value => localDate(value).toLocaleDateString('ru-RU');
+      const setDates = (start, end) => { startInput.value = iso(start); endInput.value = iso(end); };
+      const now = new Date();
+      setDates(new Date(now.getFullYear(), now.getMonth(), 1), now);
+
+      document.querySelectorAll('[data-period]').forEach(button => button.addEventListener('click', () => {
+        const today = new Date();
+        let start = new Date(today), end = new Date(today);
+        if (button.dataset.period === '7days') start.setDate(start.getDate() - 6);
+        if (button.dataset.period === 'month') start = new Date(today.getFullYear(), today.getMonth(), 1);
+        if (button.dataset.period === 'previous') {
+          start = new Date(today.getFullYear(), today.getMonth() - 1, 1);
+          end = new Date(today.getFullYear(), today.getMonth(), 0);
+        }
+        setDates(start, end);
+        if (tg && tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
+      }));
+
+      function renderSources() {
+        list.replaceChildren();
+        const rows = data[activeTab];
+        if (!rows.length) {
+          const empty = document.createElement('div');
+          empty.className = 'empty';
+          empty.textContent = activeTab === 'leads' ? 'Лидов за этот период нет' : 'Сделок за этот период нет';
+          list.append(empty);
+          return;
+        }
+        rows.forEach(row => {
+          const card = document.createElement('section');
+          card.className = 'source';
+          const head = document.createElement('div');
+          head.className = 'source-head';
+          head.setAttribute('role', 'button'); head.tabIndex = 0;
+          const name = document.createElement('span'); name.className = 'source-name'; name.textContent = row.source;
+          const total = document.createElement('span'); total.className = 'source-total'; total.textContent = row.total;
+          const arrow = document.createElement('span'); arrow.className = 'chevron'; arrow.textContent = '⌄';
+          head.append(name, total, arrow);
+          const details = document.createElement('div'); details.className = 'details';
+          row.stages.forEach(stage => {
+            const line = document.createElement('div'); line.className = 'stage';
+            const label = document.createElement('span'); label.textContent = stage.name;
+            const count = document.createElement('b'); count.textContent = stage.count;
+            line.append(label, count); details.append(line);
+          });
+          if (activeTab === 'deals' && row.contracts) {
+            const note = document.createElement('div'); note.className = 'contract-note';
+            note.textContent = `Договоров: ${row.contracts}`; details.append(note);
+          }
+          const toggle = () => card.classList.toggle('open');
+          head.addEventListener('click', toggle);
+          head.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggle(); } });
+          card.append(head, details); list.append(card);
+        });
+      }
+
+      function render() {
+        document.getElementById('converted').textContent = data.totals.converted;
+        document.getElementById('contracts').textContent = data.totals.contracts;
+        document.getElementById('lead-count').textContent = `· ${data.totals.leads}`;
+        document.getElementById('deal-count').textContent = `· ${data.totals.deals}`;
+        document.getElementById('meta').textContent =
+          `${shortDate(data.period.start)}–${shortDate(data.period.end)} · обращений: ${data.totals.unique}`;
+        report.classList.remove('hidden'); renderSources();
+      }
+
+      document.querySelectorAll('[data-tab]').forEach(button => button.addEventListener('click', () => {
+        activeTab = button.dataset.tab;
+        document.querySelectorAll('[data-tab]').forEach(tab => tab.classList.toggle('active', tab === button));
+        renderSources();
+        if (tg && tg.HapticFeedback) tg.HapticFeedback.selectionChanged();
+      }));
+
+      buildButton.addEventListener('click', async () => {
+        status.className = '';
+        if (!startInput.value || !endInput.value || startInput.value > endInput.value) {
+          status.className = 'error'; status.textContent = 'Проверьте выбранные даты'; return;
+        }
+        buildButton.disabled = true;
+        status.replaceChildren();
+        const spinner = document.createElement('span'); spinner.className = 'spinner';
+        status.append(spinner, document.createTextNode('Сверяю данные с Bitrix…'));
+        try {
+          const params = new URLSearchParams({start: startInput.value, end: endInput.value});
+          const response = await fetch(`/api/miniapp/report?${params}`, {
+            headers: {'X-Telegram-Init-Data': tg ? tg.initData : ''}
+          });
+          if (!response.ok) {
+            const body = await response.json().catch(() => ({}));
+            throw new Error(body.detail || 'Не удалось построить отчёт');
+          }
+          data = await response.json(); activeTab = 'leads';
+          document.querySelectorAll('[data-tab]').forEach(tab => tab.classList.toggle('active', tab.dataset.tab === activeTab));
+          render(); status.textContent = 'Данные сверены с CRM';
+          if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('success');
+        } catch (error) {
+          status.className = 'error'; status.textContent = error.message;
+          if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('error');
+        } finally { buildButton.disabled = false; }
+      });
+    })();
+  </script>
+</body>
+</html>
