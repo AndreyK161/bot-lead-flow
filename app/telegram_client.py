@@ -157,6 +157,33 @@ async def send_telegram_message(
     return last_message
 
 
+async def send_telegram_document(
+    content: bytes,
+    filename: str,
+    *,
+    chat_id: int | str,
+    caption: str | None = None,
+) -> dict[str, Any]:
+    """Send an in-memory document without writing report files to disk."""
+    settings = get_settings()
+    url = f"https://api.telegram.org/bot{settings.telegram_bot_token}/sendDocument"
+    data: dict[str, Any] = {"chat_id": str(chat_id), "parse_mode": "HTML"}
+    if caption:
+        data["caption"] = caption
+    files = {
+        "document": (
+            filename,
+            content,
+            "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        ),
+    }
+    async with httpx.AsyncClient(timeout=60.0) as client:
+        response = await client.post(url, data=data, files=files)
+        if response.status_code >= 400:
+            raise TelegramApiError(f"sendDocument: {response.status_code} {response.text}")
+    return response.json()["result"]
+
+
 async def edit_message_text(
     chat_id: int | str,
     message_id: int,

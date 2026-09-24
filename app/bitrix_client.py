@@ -149,6 +149,13 @@ class BitrixClient:
             "select": ["ID", "SOURCE_ID", "STATUS_ID", "ASSIGNED_BY_ID"],
         })
 
+    async def get_leads_created_between_full(self, start_iso: str, end_iso: str) -> list[dict[str, Any]]:
+        return await self._call_all("crm.lead.list", {
+            "order": {"DATE_CREATE": "ASC", "ID": "ASC"},
+            "filter": {">=DATE_CREATE": start_iso, "<DATE_CREATE": end_iso},
+            "select": LEAD_SELECT_FIELDS,
+        })
+
     async def get_leads_modified_between(self, start_iso: str, end_iso: str) -> list[dict[str, Any]]:
         return await self._call_all("crm.lead.list", {
             "order": {"DATE_MODIFY": "ASC", "ID": "ASC"},
@@ -208,10 +215,11 @@ class BitrixClient:
         return result
 
     async def get_deals_by_contact_ids(
-        self, contact_ids: list[str], category_id: str = "0",
+        self, contact_ids: list[str], category_id: str = "0", *, extra_fields: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
         unique_ids = list(dict.fromkeys(str(value) for value in contact_ids if value and str(value) != "0"))
+        select = list(dict.fromkeys(DEAL_SELECT_FIELDS + list(extra_fields or [])))
         for offset in range(0, len(unique_ids), 50):
             result.extend(await self._call_all("crm.deal.list", {
                 "order": {"ID": "ASC"},
@@ -219,9 +227,19 @@ class BitrixClient:
                     "CATEGORY_ID": str(category_id),
                     "CONTACT_ID": unique_ids[offset:offset + 50],
                 },
-                "select": DEAL_SELECT_FIELDS,
+                "select": select,
             }))
         return result
+
+    async def get_deals_created_since(
+        self, category_id: str, start_iso: str, *, extra_fields: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        select = list(dict.fromkeys(DEAL_SELECT_FIELDS + list(extra_fields or [])))
+        return await self._call_all("crm.deal.list", {
+            "order": {"DATE_CREATE": "ASC", "ID": "ASC"},
+            "filter": {"CATEGORY_ID": str(category_id), ">=DATE_CREATE": start_iso},
+            "select": select,
+        })
 
     async def get_category_deals_after_id(
         self, category_id: str, after_id: str | int, *, extra_fields: list[str] | None = None,

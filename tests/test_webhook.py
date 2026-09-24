@@ -220,10 +220,13 @@ class TelegramWebhookAuthTests(WebhookTestCase):
         request = json_request(
             headers={'X-Telegram-Bot-Api-Secret-Token': 'secret'}, update_id=79, message=message,
         )
-        with patch('app.main.outcomes.build_period_report', return_value='period report') as build:
+        with patch('app.main.period_reports.enqueue_period_report', return_value=True) as enqueue:
             await main.telegram_webhook(request)
-        build.assert_called_once()
-        self.send_message.assert_awaited_once_with('period report', chat_id=director_id)
+        enqueue.assert_called_once()
+        self.assertEqual(enqueue.call_args.kwargs['chat_id'], director_id)
+        self.send_message.assert_awaited_once()
+        self.assertEqual(self.send_message.call_args.kwargs['chat_id'], director_id)
+        self.assertIn('Excel', self.send_message.call_args.args[0])
 
     async def test_manual_callback_is_acknowledged_before_processing(self):
         callback={'id':'cb-manual','from':{'id':100},'data':'ms:abc:tg','message':{'chat':{'id':100},'message_id':1}}

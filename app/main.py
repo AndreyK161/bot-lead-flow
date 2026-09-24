@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request, status
 
-from app import deals, journal, manual, outcomes, reconcile, reports, stats, store
+from app import deals, journal, manual, outcomes, period_reports, reconcile, reports, stats, store
 from app.bitrix_client import BitrixApiError, BitrixClient
 from app.config import get_settings
 from app.formatter import (
@@ -248,7 +248,14 @@ async def _handle_message(message: dict, settings, update_id: int) -> None:
                 "Формат: <code>/period 01.09.2026 - 23.09.2026</code>", chat_id=user_id,
             )
         else:
-            await send_telegram_message(outcomes.build_period_report(*period), chat_id=user_id)
+            started = period_reports.enqueue_period_report(*period, chat_id=user_id)
+            await send_telegram_message(
+                (
+                    "⏳ Сверяю лиды, сделки и договоры с Bitrix. Excel пришлю сюда после завершения."
+                    if started else "⏳ Ваш предыдущий отчёт ещё формируется."
+                ),
+                chat_id=user_id,
+            )
         return
 
     if await manual.handle_main_message(message, update_id):
