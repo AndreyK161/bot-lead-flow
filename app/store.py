@@ -58,8 +58,13 @@ def _schema(*, postgres: bool) -> str:
         CREATE TABLE IF NOT EXISTS crm_items (
             entity_type TEXT NOT NULL, entity_id TEXT NOT NULL,
             source_id TEXT, source_name TEXT, created_date TEXT NOT NULL,
-            current_stage_id TEXT, current_assignee_id TEXT, current_assignee_name TEXT,
+            current_stage_id TEXT, current_stage_name TEXT, current_category_id TEXT,
+            current_assignee_id TEXT, current_assignee_name TEXT,
             processed_at TEXT, processed_by_id TEXT, processed_by_name TEXT,
+            origin_lead_id TEXT, linked_deal_id TEXT,
+            outcome_entity_type TEXT, outcome_entity_id TEXT, outcome_category_id TEXT,
+            outcome_stage_id TEXT, outcome_stage_name TEXT,
+            contract_deal_id TEXT, contract_at TEXT, outcome_checked_at TEXT,
             first_seen_at {timestamp} NOT NULL DEFAULT CURRENT_TIMESTAMP,
             updated_at TEXT NOT NULL,
             PRIMARY KEY (entity_type, entity_id)
@@ -111,6 +116,15 @@ def _initialize_sqlite(conn: sqlite3.Connection) -> None:
         if name not in columns:
             conn.execute(f"ALTER TABLE submissions ADD COLUMN {name} {definition}")
     conn.execute("UPDATE submissions SET created_at=CURRENT_TIMESTAMP WHERE created_at IS NULL")
+    crm_columns = {row[1] for row in conn.execute("PRAGMA table_info(crm_items)")}
+    for name in (
+        "current_stage_name", "current_category_id", "origin_lead_id", "linked_deal_id",
+        "outcome_entity_type", "outcome_entity_id", "outcome_category_id",
+        "outcome_stage_id", "outcome_stage_name", "contract_deal_id", "contract_at",
+        "outcome_checked_at",
+    ):
+        if name not in crm_columns:
+            conn.execute(f"ALTER TABLE crm_items ADD COLUMN {name} TEXT")
 
 
 def _initialize_postgres(conn) -> None:
@@ -123,6 +137,18 @@ def _initialize_postgres(conn) -> None:
         "ALTER TABLE submissions ADD COLUMN IF NOT EXISTS bot_kind TEXT DEFAULT 'legacy'",
         "ALTER TABLE submissions ADD COLUMN IF NOT EXISTS duplicate_of TEXT",
         "ALTER TABLE submissions ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP",
+        "ALTER TABLE crm_items ADD COLUMN IF NOT EXISTS current_stage_name TEXT",
+        "ALTER TABLE crm_items ADD COLUMN IF NOT EXISTS current_category_id TEXT",
+        "ALTER TABLE crm_items ADD COLUMN IF NOT EXISTS origin_lead_id TEXT",
+        "ALTER TABLE crm_items ADD COLUMN IF NOT EXISTS linked_deal_id TEXT",
+        "ALTER TABLE crm_items ADD COLUMN IF NOT EXISTS outcome_entity_type TEXT",
+        "ALTER TABLE crm_items ADD COLUMN IF NOT EXISTS outcome_entity_id TEXT",
+        "ALTER TABLE crm_items ADD COLUMN IF NOT EXISTS outcome_category_id TEXT",
+        "ALTER TABLE crm_items ADD COLUMN IF NOT EXISTS outcome_stage_id TEXT",
+        "ALTER TABLE crm_items ADD COLUMN IF NOT EXISTS outcome_stage_name TEXT",
+        "ALTER TABLE crm_items ADD COLUMN IF NOT EXISTS contract_deal_id TEXT",
+        "ALTER TABLE crm_items ADD COLUMN IF NOT EXISTS contract_at TEXT",
+        "ALTER TABLE crm_items ADD COLUMN IF NOT EXISTS outcome_checked_at TEXT",
     ):
         conn.execute(statement)
 

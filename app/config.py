@@ -59,6 +59,9 @@ class Settings(BaseSettings):
     reconcile_interval_seconds: int = 300
     reconcile_overlap_seconds: int = 300
     reconcile_initial_lookback_hours: int = 24
+    outcome_sync_time: str = "03:00"
+    accompaniment_deal_category_id: str = "2"
+    contract_source_url_field: str = "UF_CRM_1775217002"
 
 
 @lru_cache

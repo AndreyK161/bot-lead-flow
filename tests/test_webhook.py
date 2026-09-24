@@ -209,6 +209,22 @@ class TelegramWebhookAuthTests(WebhookTestCase):
         self.assertEqual(result,{'status':'ok'})
         handle.assert_awaited_once_with(message,77)
 
+    async def test_period_command_is_sent_only_to_requesting_director(self):
+        director_id = 1297686797
+        self.settings.director_user_id_set = {director_id}
+        message = {
+            'chat': {'id': director_id, 'type': 'private'},
+            'from': {'id': director_id},
+            'text': '/period 01.09.2026 - 23.09.2026',
+        }
+        request = json_request(
+            headers={'X-Telegram-Bot-Api-Secret-Token': 'secret'}, update_id=79, message=message,
+        )
+        with patch('app.main.outcomes.build_period_report', return_value='period report') as build:
+            await main.telegram_webhook(request)
+        build.assert_called_once()
+        self.send_message.assert_awaited_once_with('period report', chat_id=director_id)
+
     async def test_manual_callback_is_acknowledged_before_processing(self):
         callback={'id':'cb-manual','from':{'id':100},'data':'ms:abc:tg','message':{'chat':{'id':100},'message_id':1}}
         request=json_request(headers={'X-Telegram-Bot-Api-Secret-Token':'secret'},update_id=78,callback_query=callback)

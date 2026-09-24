@@ -29,6 +29,7 @@ LEAD_SELECT_FIELDS = [
     "UTM_TERM",
     "COMMENTS",
     "ASSIGNED_BY_ID",
+    "CONTACT_ID",
     "STATUS_ID",
     "DATE_CREATE",
     "DATE_MODIFY",
@@ -170,6 +171,67 @@ class BitrixClient:
 
     async def get_deal(self, deal_id: str | int) -> dict[str, Any]:
         return await self._call("crm.deal.get", {"id": deal_id, "select": DEAL_SELECT_FIELDS})
+
+    async def _get_by_ids(
+        self, method: str, ids: list[str], select: list[str], *, extra_filter: dict[str, Any] | None = None,
+    ) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
+        unique_ids = list(dict.fromkeys(str(value) for value in ids if value))
+        for offset in range(0, len(unique_ids), 50):
+            item_filter: dict[str, Any] = {"ID": unique_ids[offset:offset + 50]}
+            item_filter.update(extra_filter or {})
+            result.extend(await self._call_all(method, {
+                "order": {"ID": "ASC"}, "filter": item_filter, "select": select,
+            }))
+        return result
+
+    async def get_leads_by_ids(self, lead_ids: list[str]) -> list[dict[str, Any]]:
+        return await self._get_by_ids("crm.lead.list", lead_ids, LEAD_SELECT_FIELDS)
+
+    async def get_deals_by_ids(
+        self, deal_ids: list[str], *, select: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        return await self._get_by_ids("crm.deal.list", deal_ids, select or DEAL_SELECT_FIELDS)
+
+    async def get_deals_by_lead_ids(self, lead_ids: list[str], category_id: str = "0") -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
+        unique_ids = list(dict.fromkeys(str(value) for value in lead_ids if value))
+        for offset in range(0, len(unique_ids), 50):
+            result.extend(await self._call_all("crm.deal.list", {
+                "order": {"ID": "ASC"},
+                "filter": {
+                    "CATEGORY_ID": str(category_id),
+                    "LEAD_ID": unique_ids[offset:offset + 50],
+                },
+                "select": DEAL_SELECT_FIELDS,
+            }))
+        return result
+
+    async def get_deals_by_contact_ids(
+        self, contact_ids: list[str], category_id: str = "0",
+    ) -> list[dict[str, Any]]:
+        result: list[dict[str, Any]] = []
+        unique_ids = list(dict.fromkeys(str(value) for value in contact_ids if value and str(value) != "0"))
+        for offset in range(0, len(unique_ids), 50):
+            result.extend(await self._call_all("crm.deal.list", {
+                "order": {"ID": "ASC"},
+                "filter": {
+                    "CATEGORY_ID": str(category_id),
+                    "CONTACT_ID": unique_ids[offset:offset + 50],
+                },
+                "select": DEAL_SELECT_FIELDS,
+            }))
+        return result
+
+    async def get_category_deals_after_id(
+        self, category_id: str, after_id: str | int, *, extra_fields: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        select = list(dict.fromkeys(DEAL_SELECT_FIELDS + list(extra_fields or [])))
+        return await self._call_all("crm.deal.list", {
+            "order": {"ID": "ASC"},
+            "filter": {"CATEGORY_ID": str(category_id), ">ID": int(after_id)},
+            "select": select,
+        })
 
     async def get_contact(self, contact_id: str | int) -> dict[str, Any]:
         return await self._call("crm.contact.get", {"id": contact_id})

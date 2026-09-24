@@ -10,7 +10,7 @@ from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request, status
 
-from app import deals, journal, manual, reconcile, reports, stats, store
+from app import deals, journal, manual, outcomes, reconcile, reports, stats, store
 from app.bitrix_client import BitrixApiError, BitrixClient
 from app.config import get_settings
 from app.formatter import (
@@ -44,6 +44,7 @@ async def lifespan(app):
         asyncio.create_task(manual.recovery_loop()),
         asyncio.create_task(reports.daily_report_loop()),
         asyncio.create_task(reconcile.reconciliation_loop()),
+        asyncio.create_task(outcomes.daily_sync_loop()),
         asyncio.create_task(_bitrix_event_recovery_loop()),
     ]
     yield
@@ -231,8 +232,23 @@ async def _handle_message(message: dict, settings, update_id: int) -> None:
         store.record_start(user_id, user.get("username"), user.get("first_name"))
         help_text = "Готово — вы будете получать уведомления от бота здесь."
         if user_id in settings.director_user_id_set:
-            help_text += "\n\nДля ручной заявки отправьте номер телефона.\n/source — настроить источники\n/cancel — отменить ввод заявки"
+            help_text += (
+                "\n\nДля ручной заявки отправьте номер телефона."
+                "\n/period ДД.ММ.ГГГГ - ДД.ММ.ГГГГ — текущий результат обращений"
+                "\n/source — настроить источники\n/cancel — отменить ввод заявки"
+            )
         await send_telegram_message(help_text, chat_id=user_id)
+        return
+
+    command = text.split()[0].split("@")[0].lower() if text else ""
+    if command == "/period" and user_id in settings.director_user_id_set:
+        period = outcomes.parse_period(text)
+        if not period:
+            await send_telegram_message(
+                "Формат: <code>/period 01.09.2026 - 23.09.2026</code>", chat_id=user_id,
+            )
+        else:
+            await send_telegram_message(outcomes.build_period_report(*period), chat_id=user_id)
         return
 
     if await manual.handle_main_message(message, update_id):
