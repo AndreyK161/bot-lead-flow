@@ -20,6 +20,7 @@ class LivePeriodReportTests(unittest.IsolatedAsyncioTestCase):
             contract_source_url_field="UF_CONTRACT_URL",
             track_deal_category_id="0",
             accompaniment_deal_category_id="2",
+            sales_department_id="5",
             bitrix_webhook_url="https://example.bitrix24.ru/rest/1/token/",
             director_user_id_set={TEST_DIRECTOR_ID},
         )
@@ -46,6 +47,12 @@ class LivePeriodReportTests(unittest.IsolatedAsyncioTestCase):
             {"STATUS_ID": "WEB", "NAME": "Сайт"},
             {"STATUS_ID": "TG", "NAME": "Телеграм"},
             {"STATUS_ID": "VK", "NAME": "ВКонтакте"},
+        ]
+        client.get_department_users.return_value = [
+            {"ID": "7", "NAME": "Анна", "LAST_NAME": "Лидова"},
+            {"ID": "8", "NAME": "Борис", "LAST_NAME": "Сделкин"},
+            {"ID": "9", "NAME": "Вера", "LAST_NAME": "Прямая"},
+            {"ID": "10", "NAME": "Глеб", "LAST_NAME": "Безлидов"},
         ]
         client.get_lead_statuses.return_value = [
             {"STATUS_ID": "IN_PROCESS", "NAME": "Недозвон"},
@@ -95,6 +102,8 @@ class LivePeriodReportTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(contract["manager_name"], "Анна Лидова")
         converted_deal = next(item for item in data["deals"] if item["deal_id"] == "20")
         self.assertEqual(converted_deal["manager_name"], "Борис Сделкин")
+        self.assertEqual(len(data["managers"]), 4)
+        self.assertEqual(data["managers"][-1], {"id": "10", "name": "Глеб Безлидов"})
         self.assertIn("Недозвон", data["lead_stage_columns"])
 
         content = period_reports.build_workbook(data)

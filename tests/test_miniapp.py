@@ -50,6 +50,10 @@ class MiniAppReportTests(unittest.TestCase):
             "end": date(2026, 9, 23),
             "checked_at": datetime(2026, 9, 24, 12, 0),
             "portal_domain": "example.bitrix24.ru",
+            "managers": [
+                {"id": "1", "name": "Анна"}, {"id": "2", "name": "Борис"},
+                {"id": "3", "name": "Вера"}, {"id": "4", "name": "Глеб"},
+            ],
             "unique_total": 3,
             "direct_deal_count": 1,
             "leads": [
@@ -89,9 +93,8 @@ class MiniAppReportTests(unittest.TestCase):
         item = site_deals["stages"][0]["items"][0]
         self.assertEqual(item["url"], "https://example.bitrix24.ru/crm/deal/details/20/")
         self.assertEqual(item["manager_name"], "Борис")
-        self.assertEqual(payload["managers"], [
-            {"id": "1", "name": "Анна"}, {"id": "2", "name": "Борис"},
-        ])
+        self.assertEqual(len(payload["managers"]), 4)
+        self.assertEqual(payload["managers"][-1], {"id": "4", "name": "Глеб"})
 
     def test_page_has_native_date_inputs_and_both_tabs(self):
         html = Path(miniapp.HTML_PATH).read_text(encoding="utf-8")

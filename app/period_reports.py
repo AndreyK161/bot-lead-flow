@@ -54,12 +54,13 @@ async def collect_live_period(
     start_iso, end_iso = _iso_bounds(start, end, settings.daily_stats_timezone)
     contract_field = settings.contract_source_url_field
 
-    leads, sources, lead_statuses, sale_stages, contract_stages = await asyncio.gather(
+    leads, sources, lead_statuses, sale_stages, contract_stages, sales_users = await asyncio.gather(
         client.get_leads_created_between_full(start_iso, end_iso),
         client.get_sources(),
         client.get_lead_statuses(),
         client.get_deal_stages(settings.track_deal_category_id),
         client.get_deal_stages(settings.accompaniment_deal_category_id),
+        client.get_department_users(settings.sales_department_id),
     )
     lead_ids = [str(lead["ID"]) for lead in leads]
     contact_ids = [str(lead.get("CONTACT_ID") or "") for lead in leads]
@@ -123,6 +124,16 @@ async def collect_live_period(
         user_id: name or f"Сотрудник #{user_id}"
         for user_id, name in zip(manager_ids, manager_values)
     }
+    sales_managers = [
+        {
+            "id": str(user["ID"]),
+            "name": " ".join(
+                part for part in (str(user.get("NAME") or ""), str(user.get("LAST_NAME") or ""))
+                if part
+            ) or str(user.get("EMAIL") or f"Сотрудник #{user['ID']}"),
+        }
+        for user in sales_users
+    ]
     lead_stage_order = [lead_names[str(item.get("STATUS_ID") or "")] for item in lead_statuses]
     sale_stage_order = [sale_names[str(item.get("STATUS_ID") or "")] for item in sale_stages]
     lead_details: list[dict] = []
@@ -219,6 +230,7 @@ async def collect_live_period(
         "unique_total": len(lead_details) + direct_deal_count,
         "checked_at": datetime.now(ZoneInfo(settings.daily_stats_timezone)),
         "portal_domain": urlparse(settings.bitrix_webhook_url).netloc,
+        "managers": sorted(sales_managers, key=lambda item: item["name"]),
     }
 
 

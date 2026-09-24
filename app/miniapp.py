@@ -106,10 +106,6 @@ def _source_rows(
 def report_payload(data: dict) -> dict:
     leads = data["leads"]
     deals = data["deals"]
-    managers = {
-        (item["manager_id"], item["manager_name"])
-        for item in [*leads, *deals]
-    }
     return {
         "period": {
             "start": data["start"].isoformat(),
@@ -124,10 +120,7 @@ def report_payload(data: dict) -> dict:
             "deals": len(deals),
             "contracts": sum(bool(item["contract"]) for item in deals),
         },
-        "managers": [
-            {"id": manager_id, "name": manager_name}
-            for manager_id, manager_name in sorted(managers, key=lambda item: item[1])
-        ],
+        "managers": data["managers"],
         "leads": _source_rows(
             leads, "result_stage", "lead_id", "lead", data["portal_domain"],
         ),
