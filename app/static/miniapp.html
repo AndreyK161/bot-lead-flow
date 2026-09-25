@@ -21,7 +21,7 @@
     body {
       margin: 0; min-height: 100vh; background: var(--bg); color: var(--text);
       font: 15px/1.4 -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
-      -webkit-font-smoothing: antialiased;
+      -webkit-font-smoothing: antialiased; overflow-x: hidden;
     }
     main { max-width: 680px; margin: 0 auto; padding: 22px 16px calc(32px + env(safe-area-inset-bottom)); }
     h1 { margin: 0 0 5px; font-size: 25px; letter-spacing: -.4px; }
@@ -37,11 +37,18 @@
     .chip:active, .tab:active, .source:active { transform: scale(.985); }
     .dates { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; }
     .period-preview { margin-top: 10px; color: var(--hint); text-align: center; font-size: 12px; }
-    label { display: block; color: var(--hint); font-size: 12px; font-weight: 600; }
-    input[type=date] {
-      display: block; width: 100%; margin-top: 5px; padding: 11px 10px;
-      color: var(--text); background: var(--bg); border: 1px solid var(--line);
-      border-radius: 11px; font: inherit; font-weight: 600; min-height: 44px;
+    .date-field { display: block; min-width: 0; color: var(--hint); font-size: 12px; font-weight: 600; }
+    .date-control {
+      position: relative; display: flex; align-items: center; gap: 8px; width: 100%;
+      min-height: 48px; margin-top: 6px; padding: 11px 13px; color: var(--text);
+      background: var(--bg); border: 1px solid var(--line); border-radius: 12px;
+      font-size: 15px; font-weight: 650;
+    }
+    .date-value { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .date-icon { color: var(--button); font-size: 17px; line-height: 1; }
+    .date-control input[type=date] {
+      position: absolute; inset: 0; width: 100%; height: 100%; margin: 0;
+      border: 0; opacity: 0; cursor: pointer; -webkit-appearance: none; appearance: none;
     }
     .build {
       display: block; min-width: 190px; margin: 18px auto 0; padding: 12px 20px;
@@ -97,7 +104,23 @@
     .empty { padding: 26px 12px; color: var(--hint); text-align: center; }
     .spinner { display: inline-block; width: 14px; height: 14px; margin-right: 7px; border: 2px solid var(--line); border-top-color: var(--button); border-radius: 50%; vertical-align: -2px; animation: spin .8s linear infinite; }
     @keyframes spin { to { transform: rotate(360deg); } }
-    @media (max-width: 360px) { .dates { grid-template-columns: 1fr; } }
+    @media (max-width: 520px) {
+      main { padding: 18px 14px calc(28px + env(safe-area-inset-bottom)); }
+      h1 { font-size: 24px; }
+      .subtitle { margin-bottom: 17px; }
+      .panel { padding: 14px; }
+      .quick { display: grid; grid-template-columns: 1fr 1fr; overflow: visible; margin: 0 0 16px; padding: 0; }
+      .chip { width: 100%; padding: 10px 7px; overflow: hidden; text-overflow: ellipsis; }
+      .dates { grid-template-columns: 1fr; gap: 12px; }
+      .date-control { background: var(--card); }
+      .period-preview { margin: 12px 4px 0; line-height: 1.45; }
+      .build { width: min(100%, 280px); margin-top: 16px; }
+      .manager-filter { padding: 12px; }
+      .summary { gap: 8px; }
+      .kpi { padding: 13px; }
+      .kpi strong { font-size: 26px; }
+      .source-head { padding: 13px; }
+    }
   </style>
 </head>
 <body>
@@ -113,8 +136,18 @@
         <button class="chip" data-period="previous">Прошлый месяц</button>
       </div>
       <div class="dates">
-        <label>Дата начала<input id="start" type="date" required></label>
-        <label>Дата окончания<input id="end" type="date" required></label>
+        <label class="date-field">Дата начала
+          <span class="date-control">
+            <span id="start-display" class="date-value"></span><span class="date-icon">▾</span>
+            <input id="start" type="date" required aria-label="Дата начала">
+          </span>
+        </label>
+        <label class="date-field">Дата окончания
+          <span class="date-control">
+            <span id="end-display" class="date-value"></span><span class="date-icon">▾</span>
+            <input id="end" type="date" required aria-label="Дата окончания">
+          </span>
+        </label>
       </div>
       <div id="period-preview" class="period-preview"></div>
       <button id="build" class="build">Показать отчёт</button>
@@ -149,6 +182,8 @@
       if (tg) { tg.ready(); tg.expand(); }
       const startInput = document.getElementById('start');
       const endInput = document.getElementById('end');
+      const startDisplay = document.getElementById('start-display');
+      const endDisplay = document.getElementById('end-display');
       const buildButton = document.getElementById('build');
       const periodPreview = document.getElementById('period-preview');
       const status = document.getElementById('status');
@@ -171,6 +206,8 @@
       const shortDate = value => localDate(value).toLocaleDateString('ru-RU');
       const longDate = value => localDate(value).toLocaleDateString('ru-RU', {day: 'numeric', month: 'long', year: 'numeric'});
       const updatePeriodPreview = () => {
+        startDisplay.textContent = startInput.value ? longDate(startInput.value) : 'Выберите дату';
+        endDisplay.textContent = endInput.value ? longDate(endInput.value) : 'Выберите дату';
         periodPreview.textContent = startInput.value && endInput.value
           ? `Выбрано: ${longDate(startInput.value)} — ${longDate(endInput.value)}` : '';
       };
@@ -271,22 +308,27 @@
             const stageArrow = document.createElement('span'); stageArrow.className = 'stage-arrow'; stageArrow.textContent = '⌄';
             line.append(label, count, stageArrow);
             const links = document.createElement('div'); links.className = 'entity-links';
-            stage.items.forEach(item => {
-              const entityRow = document.createElement('div'); entityRow.className = 'entity-row';
-              const primary = document.createElement('a'); primary.className = 'entity-link';
-              primary.href = item.url; primary.target = '_blank'; primary.rel = 'noopener noreferrer';
-              primary.textContent = `${activeTab === 'leads' ? 'Лид' : 'Сделка'} №${item.id}`;
-              entityRow.append(primary);
-              if (activeTab === 'leads' && item.deal_id) {
-                const deal = document.createElement('a'); deal.className = 'entity-link';
-                deal.href = item.deal_url; deal.target = '_blank'; deal.rel = 'noopener noreferrer';
-                deal.textContent = `Сделка №${item.deal_id}`; entityRow.append(deal);
-              }
-              const manager = document.createElement('span'); manager.className = 'entity-manager';
-              manager.textContent = item.manager_name; entityRow.append(manager);
-              links.append(entityRow);
-            });
-            const toggleStage = () => stageBlock.classList.toggle('open');
+            let linksRendered = false;
+            const renderLinks = () => {
+              if (linksRendered) return;
+              stage.items.forEach(item => {
+                const entityRow = document.createElement('div'); entityRow.className = 'entity-row';
+                const primary = document.createElement('a'); primary.className = 'entity-link';
+                primary.href = item.url; primary.target = '_blank'; primary.rel = 'noopener noreferrer';
+                primary.textContent = `${activeTab === 'leads' ? 'Лид' : 'Сделка'} №${item.id}`;
+                entityRow.append(primary);
+                if (activeTab === 'leads' && item.deal_id) {
+                  const deal = document.createElement('a'); deal.className = 'entity-link';
+                  deal.href = item.deal_url; deal.target = '_blank'; deal.rel = 'noopener noreferrer';
+                  deal.textContent = `Сделка №${item.deal_id}`; entityRow.append(deal);
+                }
+                const manager = document.createElement('span'); manager.className = 'entity-manager';
+                manager.textContent = item.manager_name; entityRow.append(manager);
+                links.append(entityRow);
+              });
+              linksRendered = true;
+            };
+            const toggleStage = () => { renderLinks(); stageBlock.classList.toggle('open'); };
             line.addEventListener('click', toggleStage);
             line.addEventListener('keydown', event => { if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); toggleStage(); } });
             stageBlock.append(line, links); details.append(stageBlock);
@@ -351,7 +393,7 @@
           showProgress(job.progress, job.message);
           if (job.status === 'done') return job.result;
           if (job.status === 'error') throw new Error(job.message || 'Не удалось построить отчёт');
-          await wait(750);
+          await wait(1500);
         }
       }
 
