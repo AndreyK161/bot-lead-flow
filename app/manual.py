@@ -217,14 +217,21 @@ async def _create(row, telegram_user_id):
     row = store.submission(row["id"])
     await publish(row)
     await sync(row)
-    manager_chat_id = store.manager_telegram_id(row["manager_id"])
-    if manager_chat_id:
+    manager_chat_ids = store.manager_telegram_ids(row["manager_id"])
+    if manager_chat_ids:
         lead = await BitrixClient().get_lead(lead_id)
         text = "📌 <b>На вас назначен лид</b>\n\n" + build_lead_notification(
             lead, portal_domain=urlparse(get_settings().bitrix_webhook_url).netloc,
             source_name=row["source_name"], assigned_name=row["manager"],
         )
-        await send_telegram_message(text, chat_id=manager_chat_id)
+        for manager_chat_id in manager_chat_ids:
+            try:
+                await send_telegram_message(text, chat_id=manager_chat_id)
+            except Exception:
+                logger.exception(
+                    "Failed to notify manager telegram_id=%s about manual lead_id=%s",
+                    manager_chat_id, lead_id,
+                )
 
 
 async def _finish(row, telegram_user_id, *, force=False):

@@ -140,9 +140,10 @@ async def send_daily_reports(report_now: datetime | None = None) -> None:
         name = await client.get_user_name(manager_id) or manager_id
         manager_blocks.append((name, body))
 
-        manager_chat_id = store.manager_telegram_id(manager_id)
-        delivery_key = f"manager:{manager_chat_id}"
-        if manager_chat_id and not _delivered(report_date, delivery_key):
+        for manager_chat_id in store.manager_telegram_ids(manager_id):
+            delivery_key = f"manager:{manager_chat_id}"
+            if _delivered(report_date, delivery_key):
+                continue
             text = f"📊 <b>Отчёт за {today_label}</b>\n\n{body}"
             try:
                 message = await send_telegram_message(text, chat_id=manager_chat_id)

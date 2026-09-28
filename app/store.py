@@ -37,9 +37,11 @@ def _schema(*, postgres: bool) -> str:
             started_at {timestamp} DEFAULT CURRENT_TIMESTAMP
         );
         CREATE TABLE IF NOT EXISTS manager_links (
-            bitrix_user_id TEXT PRIMARY KEY, bitrix_name TEXT, telegram_id BIGINT NOT NULL,
-            linked_at {timestamp} DEFAULT CURRENT_TIMESTAMP
+            bitrix_user_id TEXT NOT NULL, bitrix_name TEXT, telegram_id BIGINT NOT NULL,
+            linked_at {timestamp} DEFAULT CURRENT_TIMESTAMP,
+            PRIMARY KEY (bitrix_user_id, telegram_id), UNIQUE (telegram_id)
         );
+        CREATE INDEX IF NOT EXISTS idx_manager_links_manager ON manager_links(bitrix_user_id);
         CREATE TABLE IF NOT EXISTS deal_notifications (
             deal_id TEXT PRIMARY KEY, dirty INTEGER NOT NULL DEFAULT 1
         );
@@ -104,6 +106,21 @@ class _Connection:
 
 def _initialize_sqlite(conn: sqlite3.Connection) -> None:
     conn.executescript(_schema(postgres=False))
+    link_columns = list(conn.execute("PRAGMA table_info(manager_links)"))
+    link_primary_key = [row[1] for row in sorted(link_columns, key=lambda row: row[5]) if row[5]]
+    if link_primary_key == ["bitrix_user_id"]:
+        conn.executescript('''
+            ALTER TABLE manager_links RENAME TO manager_links_legacy;
+            CREATE TABLE manager_links (
+                bitrix_user_id TEXT NOT NULL, bitrix_name TEXT, telegram_id BIGINT NOT NULL,
+                linked_at TEXT DEFAULT CURRENT_TIMESTAMP,
+                PRIMARY KEY (bitrix_user_id, telegram_id), UNIQUE (telegram_id)
+            );
+            INSERT INTO manager_links (bitrix_user_id,bitrix_name,telegram_id,linked_at)
+                SELECT bitrix_user_id,bitrix_name,telegram_id,linked_at FROM manager_links_legacy;
+            DROP TABLE manager_links_legacy;
+            CREATE INDEX IF NOT EXISTS idx_manager_links_manager ON manager_links(bitrix_user_id);
+        ''')
     columns = {row[1] for row in conn.execute("PRAGMA table_info(submissions)")}
     additions = {
         "manager_id": "TEXT",
@@ -132,6 +149,9 @@ def _initialize_postgres(conn) -> None:
         if statement.strip():
             conn.execute(statement)
     for statement in (
+        "ALTER TABLE manager_links DROP CONSTRAINT IF EXISTS manager_links_pkey",
+        "ALTER TABLE manager_links ADD CONSTRAINT manager_links_pkey PRIMARY KEY (bitrix_user_id,telegram_id)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS idx_manager_links_telegram_id ON manager_links(telegram_id)",
         "ALTER TABLE submissions ADD COLUMN IF NOT EXISTS manager_id TEXT",
         "ALTER TABLE submissions ADD COLUMN IF NOT EXISTS comment TEXT",
         "ALTER TABLE submissions ADD COLUMN IF NOT EXISTS bot_kind TEXT DEFAULT 'legacy'",
@@ -236,18 +256,29 @@ def recent_starts(limit=20):
 def link_manager(bitrix_user_id, bitrix_name, telegram_id):
     execute(
         "INSERT INTO manager_links (bitrix_user_id,bitrix_name,telegram_id) VALUES (?,?,?) "
-        "ON CONFLICT(bitrix_user_id) DO UPDATE SET bitrix_name=excluded.bitrix_name,telegram_id=excluded.telegram_id",
+        "ON CONFLICT(telegram_id) DO UPDATE SET bitrix_user_id=excluded.bitrix_user_id,"
+        "bitrix_name=excluded.bitrix_name,linked_at=CURRENT_TIMESTAMP",
         (str(bitrix_user_id), bitrix_name, telegram_id),
     )
 
 
 def manager_telegram_id(bitrix_user_id):
-    result = rows("SELECT telegram_id FROM manager_links WHERE bitrix_user_id=?", (str(bitrix_user_id),))
-    return result[0]["telegram_id"] if result else None
+    result = manager_telegram_ids(bitrix_user_id)
+    return result[0] if result else None
+
+
+def manager_telegram_ids(bitrix_user_id):
+    return [
+        row["telegram_id"]
+        for row in rows(
+            "SELECT telegram_id FROM manager_links WHERE bitrix_user_id=? ORDER BY linked_at,telegram_id",
+            (str(bitrix_user_id),),
+        )
+    ]
 
 
 def list_links():
-    return rows("SELECT * FROM manager_links ORDER BY bitrix_name")
+    return rows("SELECT * FROM manager_links ORDER BY bitrix_name,telegram_id")
 
 
 def _normalized_phone(value):

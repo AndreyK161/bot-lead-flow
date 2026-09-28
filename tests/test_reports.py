@@ -138,12 +138,14 @@ class SendDailyReportsTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_linked_manager_gets_personal_report(self):
         store.link_manager('460', 'Никита Продажников', 555)
+        store.link_manager('460', 'Никита Продажников', 556)
         self.client.get_leads_created_between.return_value = [
             {'ID': '1', 'SOURCE_ID': 'TG', 'STATUS_ID': 'JUNK', 'ASSIGNED_BY_ID': '460'},
         ]
         await reports.send_daily_reports()
         chat_ids = [call.kwargs['chat_id'] for call in self.send_message.call_args_list]
         self.assertIn(555, chat_ids)
+        self.assertIn(556, chat_ids)
         personal = next(call for call in self.send_message.call_args_list if call.kwargs['chat_id'] == 555)
         self.assertIn('Отчёт за', personal.args[0])
         self.assertIn('№1</a>', personal.args[0])

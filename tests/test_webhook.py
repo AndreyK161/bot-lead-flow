@@ -381,6 +381,7 @@ class LinkFlowTests(WebhookTestCase):
 class AssignAndJunkTests(WebhookTestCase):
     async def test_assign_notifies_linked_manager(self):
         store.link_manager('460', 'Никита Продажников', 555)
+        store.link_manager('460', 'Никита Продажников', 556)
         request = json_request(
             headers={'X-Telegram-Bot-Api-Secret-Token': 'secret'},
             callback_query={'id': 'cb1', 'from': {'id': 100}, 'data': 'au:20312:460',
@@ -390,6 +391,7 @@ class AssignAndJunkTests(WebhookTestCase):
         self.client.update_lead.assert_awaited_once_with('20312', {'ASSIGNED_BY_ID': '460'})
         chat_ids = [call.kwargs.get('chat_id') for call in self.send_message.call_args_list]
         self.assertIn(555, chat_ids)
+        self.assertIn(556, chat_ids)
 
     async def test_assign_to_user_outside_department_is_rejected(self):
         request = json_request(

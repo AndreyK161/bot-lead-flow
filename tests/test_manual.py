@@ -102,6 +102,17 @@ class ManualMainBotTests(unittest.IsolatedAsyncioTestCase):
         self.assertNotIn('None',fields['COMMENTS'])
         self.assertEqual(store.submission(row['id'])['state'],'submitted')
 
+    async def test_manual_lead_notification_is_mirrored_to_both_manager_accounts(self):
+        store.link_manager('7', 'Иван Иванов', 555)
+        store.link_manager('7', 'Иван Иванов', 556)
+        row=await self.reach_comment()
+
+        await manual.handle_main_callback(self.callback(f'mskip:{row["id"]}'),4)
+
+        chat_ids = {call.kwargs.get('chat_id') for call in self.send.call_args_list}
+        self.assertIn(555, chat_ids)
+        self.assertIn(556, chat_ids)
+
     async def test_managers_are_loaded_and_stale_manager_is_rejected(self):
         row=await self.draft()
         await manual.handle_main_callback(self.callback(f'ms:{row["id"]}:tg'),2)

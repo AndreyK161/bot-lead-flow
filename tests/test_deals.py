@@ -84,6 +84,19 @@ class DealTrackingTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('Контакт совпадает с ранее записанным лидом',text)
         self.assertIn('/crm/lead/details/20460/',text)
 
+    async def test_assigned_manager_notification_is_sent_to_both_accounts(self):
+        store.link_manager('7', 'Менеджер', 555)
+        store.link_manager('7', 'Менеджер', 556)
+        self.send.reset_mock()
+        self.send.side_effect = [{'message_id': 3}, {'message_id': 4}]
+
+        await deals.notify_assigned_manager(self.client.get_deal.return_value, '7')
+
+        self.assertEqual(
+            {call.kwargs['chat_id'] for call in self.send.call_args_list},
+            {555, 556},
+        )
+
 
 class DealJunkApiTests(unittest.IsolatedAsyncioTestCase):
     def client(self,final='UC_K0Z3P6'):

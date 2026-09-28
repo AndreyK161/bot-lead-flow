@@ -75,11 +75,18 @@ async def refresh_cards(deal: dict, *, is_junk: bool = False) -> None:
 
 
 async def notify_assigned_manager(deal: dict, bitrix_user_id: str) -> None:
-    manager_chat_id = store.manager_telegram_id(bitrix_user_id)
-    if not manager_chat_id:
+    manager_chat_ids = store.manager_telegram_ids(bitrix_user_id)
+    if not manager_chat_ids:
         return
     text = "📌 <b>На вас назначена сделка</b>\n\n" + await render(deal)
-    await send_telegram_message(text, chat_id=manager_chat_id)
+    for manager_chat_id in manager_chat_ids:
+        try:
+            await send_telegram_message(text, chat_id=manager_chat_id)
+        except Exception:
+            logger.exception(
+                "Failed to notify manager telegram_id=%s about deal_id=%s",
+                manager_chat_id, deal.get("ID"),
+            )
 
 
 async def track(deal_id: str | int) -> bool:

@@ -1,3 +1,4 @@
+import sqlite3
 import tempfile
 import unittest
 from types import SimpleNamespace
@@ -38,11 +39,36 @@ class StoreLinkingTests(unittest.TestCase):
     def test_manager_telegram_id_missing_returns_none(self):
         self.assertIsNone(store.manager_telegram_id('nonexistent'))
 
-    def test_link_manager_overwrites_previous_link(self):
+    def test_manager_can_have_multiple_telegram_accounts(self):
         store.link_manager('460', 'Никита', 555)
         store.link_manager('460', 'Никита', 777)
-        self.assertEqual(store.manager_telegram_id('460'), 777)
-        self.assertEqual(len(store.list_links()), 1)
+        self.assertEqual(store.manager_telegram_ids('460'), [555, 777])
+        self.assertEqual(len(store.list_links()), 2)
+
+    def test_telegram_account_is_reassigned_instead_of_duplicated(self):
+        store.link_manager('460', 'Никита', 555)
+        store.link_manager('777', 'Анна', 555)
+        self.assertEqual(store.manager_telegram_ids('460'), [])
+        self.assertEqual(store.manager_telegram_ids('777'), [555])
+
+    def test_legacy_single_account_table_is_migrated(self):
+        path = self.tmp.name + '/db.sqlite'
+        connection = sqlite3.connect(path)
+        connection.execute(
+            'CREATE TABLE manager_links ('
+            'bitrix_user_id TEXT PRIMARY KEY, bitrix_name TEXT, telegram_id BIGINT NOT NULL, '
+            'linked_at TEXT DEFAULT CURRENT_TIMESTAMP)'
+        )
+        connection.execute(
+            'INSERT INTO manager_links (bitrix_user_id,bitrix_name,telegram_id) VALUES (?,?,?)',
+            ('460', 'Никита', 555),
+        )
+        connection.commit()
+        connection.close()
+
+        store.link_manager('460', 'Никита', 777)
+
+        self.assertEqual(store.manager_telegram_ids('460'), [555, 777])
 
     def test_list_links_sorted_by_name(self):
         store.link_manager('2', 'Борис', 2)

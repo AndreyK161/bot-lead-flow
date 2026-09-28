@@ -222,8 +222,8 @@ async def _bitrix_event_recovery_loop() -> None:
 
 async def _notify_assigned_manager(client: BitrixClient, settings, lead_id: str, bitrix_user_id: str, assigned_name: str | None) -> None:
     """Если продажник привязан к Telegram — пишет ему в личку, что на него назначили лид."""
-    manager_chat_id = store.manager_telegram_id(bitrix_user_id)
-    if not manager_chat_id:
+    manager_chat_ids = store.manager_telegram_ids(bitrix_user_id)
+    if not manager_chat_ids:
         return
     try:
         lead = await client.get_lead(lead_id)
@@ -234,9 +234,14 @@ async def _notify_assigned_manager(client: BitrixClient, settings, lead_id: str,
             source_name=source_name,
             assigned_name=assigned_name,
         )
-        await send_telegram_message(text, chat_id=manager_chat_id)
     except Exception:
-        logger.exception("Failed to notify manager telegram_id=%s about lead_id=%s", manager_chat_id, lead_id)
+        logger.exception("Failed to prepare manager notification about lead_id=%s", lead_id)
+        return
+    for manager_chat_id in manager_chat_ids:
+        try:
+            await send_telegram_message(text, chat_id=manager_chat_id)
+        except Exception:
+            logger.exception("Failed to notify manager telegram_id=%s about lead_id=%s", manager_chat_id, lead_id)
 
 
 async def _handle_message(message: dict, settings, update_id: int) -> None:
