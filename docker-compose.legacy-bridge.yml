@@ -1,0 +1,4 @@
+services:
+  bot-lead-flow:
+    volumes:
+      - ${LEGACY_DISTRIBUTION_QUEUE_HOST_DIR:?Set the legacy queue directory}:/app/legacy-distribution-queue:ro

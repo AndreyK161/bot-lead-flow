@@ -1,0 +1,72 @@
+#!/bin/sh
+set -eu
+
+backup_root="/opt/pravburo/backups/automatic"
+stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+central_env="$(mktemp)"
+
+cleanup() {
+    rm -f -- "$central_env"
+}
+trap cleanup EXIT INT TERM
+
+install -d -m 700 "$backup_root"
+
+dump_container_database() {
+    container="$1"
+    label="$2"
+    container_dump="/tmp/${label}-${stamp}.dump"
+    partial_dump="${backup_root}/${label}-${stamp}.dump.partial"
+    final_dump="${backup_root}/${label}-${stamp}.dump"
+
+    docker exec "$container" sh -c \
+        'pg_dump -U "$POSTGRES_USER" -d "$POSTGRES_DB" --format=custom --file="$1"' \
+        sh "$container_dump"
+    docker exec "$container" pg_restore --list "$container_dump" >/dev/null
+    docker cp "${container}:${container_dump}" "$partial_dump" >/dev/null
+    docker exec "$container" rm -f -- "$container_dump"
+    chmod 600 "$partial_dump"
+    mv "$partial_dump" "$final_dump"
+}
+
+dump_container_database "call-tracker-postgres-1" "call-tracker"
+dump_container_database "leadflow-postgres-1" "leadflow"
+
+# The Pravburo chatbot database is reached through WireGuard. Read its current
+# connection string from the running bot so a stale on-disk env file cannot
+# silently produce an empty or failed backup.
+central_name="pravburo-central-${stamp}.dump"
+chmod 600 "$central_env"
+docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' pravburo_bot \
+    | sed -n '/^DATABASE_URL=/p' >"$central_env"
+test -s "$central_env"
+docker run --rm --network host \
+    --env-file "$central_env" \
+    -e "BACKUP_NAME=${central_name}" \
+    -v "${backup_root}:/backup" \
+    postgres:16-alpine sh -c \
+    'pg_dump "$DATABASE_URL" --format=custom --file="/backup/${BACKUP_NAME}.partial" && pg_restore --list "/backup/${BACKUP_NAME}.partial" >/dev/null'
+chmod 600 "${backup_root}/${central_name}.partial"
+mv "${backup_root}/${central_name}.partial" "${backup_root}/${central_name}"
+
+# SQLite online backup keeps the Megafon database consistent while webhooks
+# are still being received.
+megafon_container_dump="/tmp/megafon-calls-${stamp}.sqlite3"
+megafon_partial="${backup_root}/megafon-calls-${stamp}.sqlite3.partial"
+megafon_final="${backup_root}/megafon-calls-${stamp}.sqlite3"
+docker exec megafon_call_stats python -c \
+    "import sqlite3; source=sqlite3.connect('/app/data/call_stats.sqlite3'); target=sqlite3.connect('${megafon_container_dump}'); source.backup(target); target.close(); source.close()"
+docker exec megafon_call_stats python -c \
+    "import sqlite3; db=sqlite3.connect('${megafon_container_dump}'); assert db.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'; db.close()"
+docker cp "megafon_call_stats:${megafon_container_dump}" "$megafon_partial" >/dev/null
+docker exec megafon_call_stats rm -f -- "$megafon_container_dump"
+chmod 600 "$megafon_partial"
+mv "$megafon_partial" "$megafon_final"
+
+find "$backup_root" -maxdepth 1 -type f -mtime +30 \
+    \( -name 'call-tracker-*.dump' \
+       -o -name 'leadflow-*.dump' \
+       -o -name 'pravburo-central-*.dump' \
+       -o -name 'megafon-calls-*.sqlite3' \) -delete
+
+printf 'Pravburo service backups completed at %s\n' "$stamp"

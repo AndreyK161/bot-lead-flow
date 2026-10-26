@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from app import main, manual, store
-from app.bitrix_client import BitrixApiError
+from app.bitrix_client import LEAD_PREFERRED_CALL_TIME_FIELD, BitrixApiError
 
 
 def form_request(headers=None, **fields):
@@ -112,6 +112,70 @@ class BitrixWebhookTests(WebhookTestCase):
         chat_ids = {call.kwargs['chat_id'] for call in self.send_message.call_args_list}
         self.assertEqual(chat_ids, {100, 101})
 
+    async def test_adds_preferred_call_time_to_bitrix_comments_and_notification(self):
+        self.client.get_lead.return_value = {
+            'ID': '20312',
+            'NAME': 'Клиент',
+            'SOURCE_ID': 'EMAIL',
+            'ASSIGNED_BY_ID': '',
+            'COMMENTS': 'Заявка с сайта',
+            LEAD_PREFERRED_CALL_TIME_FIELD: '17:00 - 17:30',
+        }
+        request = form_request(**{
+            'auth[application_token]': 'apptoken',
+            'event': 'ONCRMLEADADD',
+            'data[FIELDS][ID]': '20312',
+        })
+
+        result = await main.bitrix_webhook(request)
+
+        self.assertEqual(result, {'status': 'ok'})
+        expected = 'Заявка с сайта\nЖелаемое время звонка: 17:00 - 17:30'
+        self.client.update_lead.assert_awaited_once_with('20312', {'COMMENTS': expected})
+        self.assertIn(expected, self.send_message.call_args.args[0])
+
+    async def test_skips_empty_or_already_copied_preferred_call_time(self):
+        for lead_id, lead in (
+            ('20312', {'ID': '20312', LEAD_PREFERRED_CALL_TIME_FIELD: ''}),
+            ('20313', {
+                'ID': '20313',
+                LEAD_PREFERRED_CALL_TIME_FIELD: 'Сейчас',
+                'COMMENTS': 'Желаемое время звонка: Сейчас',
+            }),
+        ):
+            with self.subTest(lead=lead):
+                self.client.reset_mock()
+                self.client.get_lead.return_value = lead
+                request = form_request(**{
+                    'auth[application_token]': 'apptoken',
+                    'event': 'ONCRMLEADADD',
+                    'data[FIELDS][ID]': lead_id,
+                })
+                await main.bitrix_webhook(request)
+                self.client.update_lead.assert_not_awaited()
+
+    async def test_excluded_privileged_user_does_not_receive_new_lead(self):
+        self.settings.director_user_id_set = {100, 101}
+        self.settings.lead_notification_excluded_user_id_set = {101}
+        request = form_request(**{'auth[application_token]': 'apptoken', 'event': 'ONCRMLEADADD', 'data[FIELDS][ID]': '20312'})
+        result = await main.bitrix_webhook(request)
+        self.assertEqual(result, {'status': 'ok'})
+        self.send_message.assert_awaited_once()
+        self.assertEqual(self.send_message.call_args.kwargs['chat_id'], 100)
+
+    async def test_excluded_from_general_flow_still_gets_personal_assignment(self):
+        manager_chat_id = 8306778724
+        self.settings.lead_notification_excluded_user_id_set = {manager_chat_id}
+        store.link_manager('460', 'Вячеслав Шандра', manager_chat_id)
+
+        await main._notify_assigned_manager(
+            self.client, self.settings, '20312', '460', 'Вячеслав Шандра',
+        )
+
+        self.send_message.assert_awaited_once()
+        self.assertEqual(self.send_message.call_args.kwargs['chat_id'], manager_chat_id)
+        self.assertIn('На вас назначен лид', self.send_message.call_args.args[0])
+
     async def test_one_director_delivery_failure_does_not_block_others(self):
         self.settings.director_user_id_set = {100, 101}
         self.send_message.side_effect = [RuntimeError('bot cannot initiate chat'), {'message_id': 1}]
@@ -209,6 +273,51 @@ class TelegramWebhookAuthTests(WebhookTestCase):
         self.assertEqual(result,{'status':'ok'})
         handle.assert_awaited_once_with(message,77)
 
+    async def test_mode_command_is_private_to_owner(self):
+        self.settings.mode_switch_user_id = 1297686797
+        for user_id in (1297686797, 555):
+            request = json_request(
+                headers={'X-Telegram-Bot-Api-Secret-Token': 'secret'},
+                message={'chat': {'id': user_id, 'type': 'private'}, 'from': {'id': user_id}, 'text': '/mode'},
+            )
+            await main.telegram_webhook(request)
+        self.assertEqual(self.send_message.await_count, 1)
+        keyboard = self.send_message.call_args.kwargs['reply_markup']
+        self.assertEqual([button['callback_data'] for button in keyboard['inline_keyboard'][0]],
+                         ['mode:supervisor', 'mode:manager'])
+
+    async def test_owner_can_switch_to_isolated_manager_app(self):
+        owner = 1297686797
+        self.settings.mode_switch_user_id = owner
+        self.settings.manager_app_url = 'https://lead.prav-buro.ru/manager/'
+        self.settings.mini_app_url = 'https://lead.prav-buro.ru/miniapp'
+        request = json_request(
+            headers={'X-Telegram-Bot-Api-Secret-Token': 'secret'},
+            callback_query={'id': 'mode-cb', 'from': {'id': owner}, 'data': 'mode:manager',
+                            'message': {'chat': {'id': owner}, 'message_id': 7, 'text': 'mode'}},
+        )
+        with patch('app.main.set_chat_menu_button', new=AsyncMock()) as set_menu:
+            await main.telegram_webhook(request)
+        self.assertEqual(store.user_ui_mode(owner), 'manager')
+        set_menu.assert_awaited_once_with(
+            'https://lead.prav-buro.ru/manager/', chat_id=owner, text='План дня',
+        )
+        self.assertEqual(
+            self.edit_text.call_args.kwargs['reply_markup']['inline_keyboard'][0][0]['web_app']['url'],
+            'https://lead.prav-buro.ru/manager/',
+        )
+
+    async def test_owner_app_keyboard_contains_mode_switch(self):
+        owner = 1297686797
+        self.settings.mode_switch_user_id = owner
+        self.settings.manager_app_url = 'https://lead.prav-buro.ru/manager/'
+        self.settings.mini_app_url = 'https://lead.prav-buro.ru/miniapp'
+        keyboard = main._mini_app_keyboard(self.settings, owner)
+        self.assertEqual(
+            [button['callback_data'] for button in keyboard['inline_keyboard'][1]],
+            ['mode:supervisor', 'mode:manager'],
+        )
+
     async def test_period_command_is_sent_only_to_requesting_director(self):
         director_id = 1297686797
         self.settings.director_user_id_set = {director_id}
@@ -286,6 +395,134 @@ class TelegramWebhookAuthTests(WebhookTestCase):
             await main.telegram_webhook(request)
 
         self.send_message.assert_not_awaited()
+
+    async def test_enabled_planner_manager_is_routed_only_to_manager_app(self):
+        manager_id = 7939114214
+        self.settings.director_user_id_set = set()
+        self.settings.admin_user_id_set = set()
+        self.settings.manager_app_url = 'https://lead.prav-buro.ru/manager/'
+        store.upsert_planner_access(
+            manager_id, bitrix_user_id='110', display_name='Яна', role='manager',
+            active=True, source='test',
+        )
+        store.set_planner_login_enabled(manager_id, True)
+        request = json_request(
+            headers={'X-Telegram-Bot-Api-Secret-Token': 'secret'},
+            message={
+                'chat': {'id': manager_id, 'type': 'private'},
+                'from': {'id': manager_id}, 'text': '/app',
+            },
+        )
+
+        await main.telegram_webhook(request)
+
+        button = self.send_message.call_args.kwargs['reply_markup']['inline_keyboard'][0][0]
+        self.assertEqual(button['web_app']['url'], 'https://lead.prav-buro.ru/manager/')
+        self.assertIn('личный план', self.send_message.call_args.args[0])
+
+    async def test_privileged_manager_gets_personal_plan_and_reports(self):
+        manager_id = 8306778724
+        self.settings.director_user_id_set = {manager_id}
+        self.settings.admin_user_id_set = {manager_id}
+        self.settings.super_admin_user_id_set = {manager_id}
+        self.settings.manager_app_url = 'https://lead.prav-buro.ru/manager/'
+        self.settings.mini_app_url = 'https://lead.prav-buro.ru/miniapp'
+        store.upsert_planner_access(
+            manager_id, bitrix_user_id='460', display_name='Вячеслав', role='manager',
+            active=True, source='test',
+        )
+        store.set_planner_login_enabled(manager_id, True)
+        keyboard = main._mini_app_keyboard(self.settings, manager_id)
+        buttons = keyboard['inline_keyboard']
+        self.assertEqual(len(buttons), 1)
+        self.assertEqual(buttons[0][0]['web_app']['url'], 'https://lead.prav-buro.ru/manager/')
+        self.assertEqual(buttons[0][0]['text'], '🗓 Открыть план дня')
+
+    async def test_enabled_supervisor_gets_planner_and_reports(self):
+        supervisor_id = 1073597301
+        self.settings.director_user_id_set = set()
+        self.settings.admin_user_id_set = set()
+        self.settings.manager_app_url = 'https://lead.prav-buro.ru/manager/'
+        self.settings.mini_app_url = 'https://lead.prav-buro.ru/miniapp'
+        store.upsert_planner_access(
+            supervisor_id, bitrix_user_id=None, display_name='Руководитель', role='supervisor',
+            active=True, source='test',
+        )
+        store.set_planner_login_enabled(supervisor_id, True)
+        request = json_request(
+            headers={'X-Telegram-Bot-Api-Secret-Token': 'secret'},
+            message={
+                'chat': {'id': supervisor_id, 'type': 'private'},
+                'from': {'id': supervisor_id}, 'text': '/app',
+            },
+        )
+        await main.telegram_webhook(request)
+        buttons = self.send_message.call_args.kwargs['reply_markup']['inline_keyboard']
+        self.assertEqual(
+            [row[0]['web_app']['url'] for row in buttons],
+            ['https://lead.prav-buro.ru/manager/', 'https://lead.prav-buro.ru/miniapp'],
+        )
+        self.assertIn('планы сотрудников', self.send_message.call_args.args[0])
+
+    async def test_enabled_planner_user_can_start_distribution_after_cutover(self):
+        manager_id = 7939114214
+        store.upsert_planner_access(
+            manager_id, bitrix_user_id='110', display_name='Яна', role='manager',
+            active=True, source='test',
+        )
+        store.set_planner_login_enabled(manager_id, True)
+        request = json_request(
+            headers={'X-Telegram-Bot-Api-Secret-Token': 'secret'},
+            message={
+                'chat': {'id': manager_id, 'type': 'private'},
+                'from': {'id': manager_id}, 'text': '/distribution',
+            },
+        )
+        with patch('app.main.distribution_flow.start', new=AsyncMock()) as start:
+            await main.telegram_webhook(request)
+        start.assert_awaited_once_with(manager_id, manager_id, self.settings)
+
+    async def test_owner_can_enable_active_planner_manager(self):
+        owner_id = 1297686797
+        manager_id = 7939114214
+        self.settings.mode_switch_user_id = owner_id
+        self.settings.manager_app_url = 'https://lead.prav-buro.ru/manager/'
+        store.upsert_planner_access(
+            manager_id, bitrix_user_id='110', display_name='Яна', role='manager',
+            active=True, source='test',
+        )
+        request = json_request(
+            headers={'X-Telegram-Bot-Api-Secret-Token': 'secret'},
+            message={
+                'chat': {'id': owner_id, 'type': 'private'},
+                'from': {'id': owner_id}, 'text': f'/planner_enable {manager_id}',
+            },
+        )
+        with patch('app.main.set_chat_menu_button', new=AsyncMock()) as set_menu:
+            await main.telegram_webhook(request)
+        self.assertTrue(store.planner_access(manager_id)['login_enabled'])
+        set_menu.assert_awaited_once_with(
+            'https://lead.prav-buro.ru/manager/', chat_id=manager_id, text='План дня',
+        )
+
+    async def test_owner_cannot_enable_inactive_planner_identity(self):
+        owner_id = 1297686797
+        inactive_id = 399005637
+        self.settings.mode_switch_user_id = owner_id
+        store.upsert_planner_access(
+            inactive_id, bitrix_user_id=None, display_name='Тестовый', role='supervisor',
+            active=False, source='test',
+        )
+        request = json_request(
+            headers={'X-Telegram-Bot-Api-Secret-Token': 'secret'},
+            message={
+                'chat': {'id': owner_id, 'type': 'private'},
+                'from': {'id': owner_id}, 'text': f'/planner_enable {inactive_id}',
+            },
+        )
+        await main.telegram_webhook(request)
+        self.assertFalse(store.planner_access(inactive_id)['login_enabled'])
+        self.assertIn('неактивна', self.send_message.call_args.args[0])
 
     async def test_manual_callback_is_acknowledged_before_processing(self):
         callback={'id':'cb-manual','from':{'id':100},'data':'ms:abc:tg','message':{'chat':{'id':100},'message_id':1}}

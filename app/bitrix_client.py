@@ -2,13 +2,23 @@
 
 from __future__ import annotations
 
-from typing import Any
+from dataclasses import dataclass
+from datetime import date, datetime, time, timedelta
+from typing import Any, Iterable
+from zoneinfo import ZoneInfo
 
 import httpx
 
 from app.config import get_settings
 
 _shared_http_client: httpx.AsyncClient | None = None
+
+
+@dataclass(frozen=True)
+class DistributionLead:
+    id: int
+    created_at: datetime
+    stage_id: str
 
 
 def _http_client() -> httpx.AsyncClient:
@@ -30,6 +40,8 @@ async def close_http_client() -> None:
 
 # Поля, которые нужны для карточки лида. Явный список экономит трафик
 # и не тянет лишнее из CRM.
+LEAD_PREFERRED_CALL_TIME_FIELD = "UF_CRM_SELECTBOX"
+
 LEAD_SELECT_FIELDS = [
     "ID",
     "TITLE",
@@ -48,6 +60,7 @@ LEAD_SELECT_FIELDS = [
     "UTM_CONTENT",
     "UTM_TERM",
     "COMMENTS",
+    LEAD_PREFERRED_CALL_TIME_FIELD,
     "ASSIGNED_BY_ID",
     "CONTACT_ID",
     "STATUS_ID",
@@ -59,7 +72,7 @@ DEAL_SELECT_FIELDS = [
     "ID", "TITLE", "CATEGORY_ID", "STAGE_ID", "SOURCE_ID",
     "SOURCE_DESCRIPTION", "COMMENTS", "ASSIGNED_BY_ID", "CONTACT_ID",
     "UTM_SOURCE", "UTM_MEDIUM", "UTM_CAMPAIGN", "UTM_CONTENT", "UTM_TERM", "LEAD_ID",
-    "DATE_CREATE",
+    "DATE_CREATE", "OPPORTUNITY", "CURRENCY_ID",
     "DATE_MODIFY",
 ]
 
@@ -125,6 +138,221 @@ class BitrixClient:
         return await self._call(
             "user.get",
             {"FILTER": {"UF_DEPARTMENT": department_id, "ACTIVE": True}},
+        )
+
+    @staticmethod
+    def _distribution_midnight(day: date, timezone: ZoneInfo) -> str:
+        return datetime.combine(day, time.min, timezone).isoformat()
+
+    async def _distribution_page(
+        self,
+        filters: dict[str, Any],
+        *,
+        stage_ids: Iterable[str],
+        start: int = 0,
+        newest_first: bool = False,
+        timezone: ZoneInfo,
+    ) -> tuple[list[DistributionLead], int | None]:
+        stages = tuple(dict.fromkeys(str(value) for value in stage_ids if value))
+        if not stages:
+            raise ValueError("Выберите хотя бы одну настроенную стадию.")
+        stage_filter = {"=stageId": stages[0]} if len(stages) == 1 else {"@stageId": list(stages)}
+        payload = await self._call_payload("crm.item.list", {
+            "entityTypeId": 1,
+            "select": ["id", "createdTime", "stageId"],
+            "filter": {**stage_filter, **filters},
+            "order": {"createdTime": "DESC", "id": "DESC"} if newest_first else {"id": "ASC"},
+            "start": start,
+        })
+        raw_items = payload.get("result", {}).get("items", [])
+        leads: list[DistributionLead] = []
+        for item in raw_items:
+            created_at = datetime.fromisoformat(str(item["createdTime"]))
+            if created_at.tzinfo is None:
+                raise BitrixApiError("Bitrix returned a lead timestamp without timezone")
+            lead = DistributionLead(int(item["id"]), created_at.astimezone(timezone), str(item["stageId"]))
+            if lead.id <= 0 or lead.stage_id not in stages:
+                raise BitrixApiError("Bitrix returned an invalid distribution lead")
+            leads.append(lead)
+        next_page = payload.get("next")
+        return leads, int(next_page) if next_page is not None else None
+
+    async def get_distribution_leads(
+        self,
+        first_day: date,
+        last_day: date,
+        stage_ids: Iterable[str],
+        *,
+        timezone: ZoneInfo,
+    ) -> list[DistributionLead]:
+        if first_day > last_day:
+            raise ValueError("Invalid date range")
+        filters = {
+            ">=createdTime": self._distribution_midnight(first_day, timezone),
+            "<createdTime": self._distribution_midnight(last_day + timedelta(days=1), timezone),
+        }
+        found: dict[int, DistributionLead] = {}
+        start = 0
+        while True:
+            leads, next_page = await self._distribution_page(
+                filters, stage_ids=stage_ids, start=start, timezone=timezone,
+            )
+            if next_page is not None and all(lead.id in found for lead in leads):
+                raise BitrixApiError("Bitrix pagination made no progress")
+            for lead in leads:
+                if not first_day <= lead.created_at.date() <= last_day:
+                    raise BitrixApiError("Bitrix returned a lead outside the requested range")
+                found[lead.id] = lead
+            if next_page is None:
+                return list(found.values())
+            start = next_page
+
+    async def distribution_counts_by_stage(
+        self,
+        dates: Iterable[date],
+        stage_ids: Iterable[str],
+        *,
+        timezone: ZoneInfo,
+    ) -> dict[date, dict[str, int]]:
+        days = sorted(set(dates))
+        stages = tuple(dict.fromkeys(str(value) for value in stage_ids if value))
+        counts = {day: dict.fromkeys(stages, 0) for day in days}
+        if not days:
+            return counts
+        ranges: list[tuple[date, date]] = []
+        first = last = days[0]
+        for day in days[1:]:
+            if day - last == timedelta(days=1):
+                last = day
+            else:
+                ranges.append((first, last))
+                first = last = day
+        ranges.append((first, last))
+        for first, last in ranges:
+            for lead in await self.get_distribution_leads(first, last, stages, timezone=timezone):
+                if lead.created_at.date() in counts:
+                    counts[lead.created_at.date()][lead.stage_id] += 1
+        return counts
+
+    async def distribution_counts(
+        self,
+        dates: Iterable[date],
+        stage_ids: Iterable[str],
+        *,
+        timezone: ZoneInfo,
+    ) -> dict[date, int]:
+        breakdown = await self.distribution_counts_by_stage(dates, stage_ids, timezone=timezone)
+        return {day: sum(values.values()) for day, values in breakdown.items()}
+
+    async def find_previous_distribution_day(
+        self,
+        before: date,
+        stage_ids: Iterable[str],
+        *,
+        excluded: Iterable[date] = (),
+        timezone: ZoneInfo,
+    ) -> tuple[date, dict[str, int]] | None:
+        excluded_days = set(excluded)
+        stages = tuple(stage_ids)
+        while True:
+            leads, _ = await self._distribution_page(
+                {"<createdTime": self._distribution_midnight(before, timezone)},
+                stage_ids=stages,
+                newest_first=True,
+                timezone=timezone,
+            )
+            if not leads:
+                return None
+            day = max(lead.created_at.date() for lead in leads)
+            if day >= before:
+                raise BitrixApiError("Bitrix returned an invalid previous date")
+            if day not in excluded_days:
+                counts = (await self.distribution_counts_by_stage([day], stages, timezone=timezone))[day]
+                if sum(counts.values()):
+                    return day, counts
+            before = day
+
+    async def get_tasks_for_crm_items(self, bindings: list[str]) -> list[dict[str, Any]]:
+        """Return Bitrix tasks bound to CRM items such as ``L_42`` or ``D_17``."""
+        bindings = list(dict.fromkeys(str(value) for value in bindings if value))
+        if not bindings:
+            return []
+        tasks: list[dict[str, Any]] = []
+        start = 0
+        while True:
+            payload = await self._call_payload("tasks.task.list", {
+                "filter": {"UF_CRM_TASK": bindings},
+                "select": [
+                    "ID", "TITLE", "CREATED_DATE", "DEADLINE", "RESPONSIBLE_ID",
+                    "CREATED_BY", "UF_CRM_TASK",
+                ],
+                "start": start,
+            })
+            result = payload.get("result") or {}
+            tasks.extend((result.get("tasks") or []) if isinstance(result, dict) else result)
+            if "next" not in payload:
+                return tasks
+            start = int(payload["next"])
+
+    async def get_tasks_for_leads(self, lead_ids: list[str]) -> list[dict[str, Any]]:
+        return await self.get_tasks_for_crm_items([f"L_{lead_id}" for lead_id in lead_ids])
+
+    async def get_tasks_by_deadline(
+        self, start_iso: str, end_iso: str, responsible_ids: list[str],
+    ) -> list[dict[str, Any]]:
+        """Return all tasks due in a period for the selected sales managers."""
+        if not responsible_ids:
+            return []
+        tasks: list[dict[str, Any]] = []
+        start = 0
+        while True:
+            payload = await self._call_payload("tasks.task.list", {
+                "filter": {
+                    ">=DEADLINE": start_iso,
+                    "<DEADLINE": end_iso,
+                    "RESPONSIBLE_ID": responsible_ids,
+                },
+                "order": {"DEADLINE": "ASC", "ID": "ASC"},
+                "select": [
+                    "ID", "TITLE", "CREATED_DATE", "DEADLINE", "CLOSED_DATE",
+                    "STATUS", "RESPONSIBLE_ID", "CREATED_BY", "UF_CRM_TASK",
+                ],
+                "start": start,
+            })
+            result = payload.get("result") or {}
+            tasks.extend((result.get("tasks") or []) if isinstance(result, dict) else result)
+            if "next" not in payload:
+                return tasks
+            start = int(payload["next"])
+
+    async def get_user_deals(
+        self, user_id: str | int, category_id: str | int,
+    ) -> list[dict[str, Any]]:
+        """Return deals currently assigned to one employee in one pipeline."""
+        return await self._call_all("crm.deal.list", {
+            "order": {"ID": "DESC"},
+            "filter": {
+                "ASSIGNED_BY_ID": str(user_id),
+                "CATEGORY_ID": str(category_id),
+                "CLOSED": "N",
+            },
+            "select": [
+                "ID", "TITLE", "CATEGORY_ID", "STAGE_ID", "ASSIGNED_BY_ID",
+                "OPPORTUNITY", "CURRENCY_ID", "DATE_CREATE", "DATE_MODIFY",
+            ],
+        })
+
+    async def get_contacts_by_ids(self, contact_ids: list[str]) -> list[dict[str, Any]]:
+        return await self._get_by_ids(
+            "crm.contact.list", contact_ids, ["ID", "PHONE"],
+        )
+
+    async def get_contacts_full_by_ids(self, contact_ids: list[str]) -> list[dict[str, Any]]:
+        """Contacts for client registries, including a display name and phone."""
+        return await self._get_by_ids(
+            "crm.contact.list",
+            contact_ids,
+            ["ID", "NAME", "SECOND_NAME", "LAST_NAME", "PHONE"],
         )
 
     async def update_lead(self, lead_id: str | int, fields: dict[str, Any]) -> None:
@@ -196,7 +424,17 @@ class BitrixClient:
         })
 
     async def get_deal(self, deal_id: str | int) -> dict[str, Any]:
-        return await self._call("crm.deal.get", {"id": deal_id, "select": DEAL_SELECT_FIELDS})
+        settings = get_settings()
+        select = list(dict.fromkeys(DEAL_SELECT_FIELDS + [
+            settings.deal_refusal_reason_field,
+            settings.deal_contract_date_field,
+        ]))
+        return await self._call("crm.deal.get", {"id": deal_id, "select": select})
+
+    async def get_deal_userfields(self) -> list[dict[str, Any]]:
+        return await self._call_all(
+            "crm.deal.userfield.list", {"order": {"ID": "ASC"}, "filter": {}},
+        )
 
     async def _get_by_ids(
         self, method: str, ids: list[str], select: list[str], *, extra_filter: dict[str, Any] | None = None,
@@ -259,6 +497,38 @@ class BitrixClient:
             "filter": {"CATEGORY_ID": str(category_id), ">=DATE_CREATE": start_iso},
             "select": select,
         })
+
+    async def get_category_deals(
+        self, category_id: str, *, extra_fields: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return the complete current contents of one deal pipeline."""
+        select = list(dict.fromkeys(DEAL_SELECT_FIELDS + list(extra_fields or [])))
+        return await self._call_all("crm.deal.list", {
+            "order": {"ID": "DESC"},
+            "filter": {"CATEGORY_ID": str(category_id)},
+            "select": select,
+        })
+
+    async def get_deal_stage_history(self, deal_ids: list[str]) -> list[dict[str, Any]]:
+        """Return stage transitions for deals, batching OWNER_ID filters."""
+        rows: list[dict[str, Any]] = []
+        unique_ids = list(dict.fromkeys(str(value) for value in deal_ids if value))
+        for offset in range(0, len(unique_ids), 50):
+            start = 0
+            while True:
+                payload = await self._call_payload("crm.stagehistory.list", {
+                    "entityTypeId": 2,
+                    "order": {"CREATED_TIME": "ASC", "ID": "ASC"},
+                    "filter": {"OWNER_ID": unique_ids[offset:offset + 50]},
+                    "select": ["ID", "OWNER_ID", "CREATED_TIME", "STAGE_ID", "CATEGORY_ID"],
+                    "start": start,
+                })
+                result = payload.get("result") or {}
+                rows.extend((result.get("items") or []) if isinstance(result, dict) else result)
+                if "next" not in payload:
+                    break
+                start = int(payload["next"])
+        return rows
 
     async def get_deals_created_between_full(
         self,

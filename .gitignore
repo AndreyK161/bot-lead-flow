@@ -5,3 +5,6 @@ __pycache__/
 data/
 venv/
 .idea
+manager_miniapp/node_modules/
+.worktrees/
+leads-and-deals-*.csv

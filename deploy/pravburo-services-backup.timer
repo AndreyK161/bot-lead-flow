@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily backup of Pravburo production services
+
+[Timer]
+OnCalendar=*-*-* 01:10:00 UTC
+Persistent=true
+RandomizedDelaySec=10m
+
+[Install]
+WantedBy=timers.target

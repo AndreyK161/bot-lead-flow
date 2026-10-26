@@ -97,6 +97,23 @@ class DealTrackingTests(unittest.IsolatedAsyncioTestCase):
             {555, 556},
         )
 
+    async def test_excluded_user_gets_no_general_deal_but_gets_personal_assignment(self):
+        self.settings.lead_notification_excluded_user_id_set = {20, 556}
+        self.assertTrue(await deals.track('101'))
+        self.assertEqual(
+            {call.kwargs['chat_id'] for call in self.send.call_args_list},
+            {'10'},
+        )
+        store.link_manager('7', 'Менеджер', 555)
+        store.link_manager('7', 'Менеджер', 556)
+        self.send.reset_mock()
+        self.send.side_effect = [{'message_id': 3}, {'message_id': 4}]
+        await deals.notify_assigned_manager(self.client.get_deal.return_value, '7')
+        self.assertEqual(
+            {call.kwargs['chat_id'] for call in self.send.call_args_list},
+            {555, 556},
+        )
+
 
 class DealJunkApiTests(unittest.IsolatedAsyncioTestCase):
     def client(self,final='UC_K0Z3P6'):

@@ -1,0 +1,5 @@
+FROM bot-lead-flow-bot-lead-flow:latest
+
+WORKDIR /app
+COPY app ./app
+COPY scripts ./scripts

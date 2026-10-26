@@ -63,10 +63,52 @@ class MiniAppAuthenticationTests(unittest.TestCase):
             director_user_id_set=set(),
             admin_user_id_set=set(),
         )
-        with patch("app.miniapp.get_settings", return_value=settings):
+        with (
+            patch("app.miniapp.get_settings", return_value=settings),
+            patch("app.miniapp.planner_access.enabled_user_ids", return_value=set()),
+        ):
             with self.assertRaises(HTTPException) as ctx:
                 miniapp._authorized_user(request)
         self.assertEqual(ctx.exception.status_code, 403)
+
+    def test_authorizes_only_enabled_planner_supervisor_for_reports(self):
+        supervisor_id = 1073597301
+        request = SimpleNamespace(headers={
+            "X-Telegram-Init-Data": signed_init_data(user_id=supervisor_id),
+        })
+        settings = SimpleNamespace(
+            telegram_bot_token=BOT_TOKEN,
+            director_user_id_set=set(), admin_user_id_set=set(),
+            super_admin_user_id_set=set(),
+        )
+        with (
+            patch("app.miniapp.get_settings", return_value=settings),
+            patch(
+                "app.miniapp.planner_access.enabled_user_ids",
+                return_value={supervisor_id},
+            ),
+        ):
+            self.assertEqual(miniapp._authorized_user(request), supervisor_id)
+
+    def test_authorizes_director_for_calls_section(self):
+        request = SimpleNamespace(headers={"X-Telegram-Init-Data": signed_init_data()})
+        settings = SimpleNamespace(
+            telegram_bot_token=BOT_TOKEN,
+            director_user_id_set={TEST_USER_ID}, admin_user_id_set=set(),
+            super_admin_user_id_set=set(),
+        )
+        with patch("app.miniapp.get_settings", return_value=settings):
+            self.assertEqual(miniapp._authorized_user(request), TEST_USER_ID)
+
+    def test_authorizes_super_admin_for_calls_section(self):
+        request = SimpleNamespace(headers={"X-Telegram-Init-Data": signed_init_data()})
+        settings = SimpleNamespace(
+            telegram_bot_token=BOT_TOKEN,
+            director_user_id_set=set(), admin_user_id_set=set(),
+            super_admin_user_id_set={TEST_USER_ID},
+        )
+        with patch("app.miniapp.get_settings", return_value=settings):
+            self.assertEqual(miniapp._authorized_user(request), TEST_USER_ID)
 
 
 class MiniAppReportTests(unittest.TestCase):
@@ -134,6 +176,31 @@ class MiniAppReportTests(unittest.TestCase):
         self.assertIn('id="manager-options"', html)
         self.assertIn('className = \'entity-link\'', html)
         self.assertIn('className = \'progress-fill\'', html)
+        self.assertIn('id="calls-nav" class="hidden"', html)
+        self.assertIn('id="clients-nav"', html)
+        self.assertIn("/api/miniapp/clients.xlsx", html)
+        self.assertIn('id="clients-search"', html)
+        self.assertIn('id="worktime-nav"', html)
+        self.assertIn("/api/miniapp/worktime.xlsx", html)
+        self.assertIn('id="tasks-nav"', html)
+        self.assertIn("/api/miniapp/tasks.xlsx", html)
+        self.assertIn("/api/miniapp/sales.xlsx", html)
+        self.assertIn("/api/miniapp/telephony.xlsx", html)
+        self.assertIn('id="presence-list"', html)
+        self.assertIn("/api/miniapp/managers/presence", html)
+        self.assertIn("window.setInterval(loadPresence, 60000)", html)
+
+    def test_presence_payload_normalizes_statuses(self):
+        payload = miniapp._presence_payload([
+            {
+                "id": 1, "full_name": "Анна", "presence_status": "working",
+                "presence_checked_at": "2026-10-16T10:00:00+00:00",
+            },
+            {"id": 2, "full_name": "Борис", "presence_status": "unexpected"},
+        ])
+        self.assertEqual(payload["managers"][0]["status"], "working")
+        self.assertEqual(payload["managers"][1]["status"], "unknown")
+        self.assertEqual(payload["checked_at"], "2026-10-16T10:00:00+00:00")
 
 
 class MiniAppReportJobTests(unittest.IsolatedAsyncioTestCase):

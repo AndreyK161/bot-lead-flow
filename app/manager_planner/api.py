@@ -1,0 +1,234 @@
+"""Private manager-mode Planner API mounted inside Lead Flow."""
+from __future__ import annotations
+
+import logging
+import sqlite3
+import time
+from datetime import date
+from pathlib import Path
+
+from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi.exceptions import RequestValidationError
+from fastapi.responses import JSONResponse
+from fastapi.staticfiles import StaticFiles
+
+from app.config import get_settings
+from app import planner_access as access_registry
+
+from .auth import InvalidInitData, validate_init_data
+from .integrations import CRM_STATUS, PlannerCRM
+from .models import DecisionInput, EmployeeInput, EmployeePatch, GoalInput, MoveInput, PlanInput, TaskInput, TaskPatch, TimerInput
+from .store import DomainError, Store, today
+
+WORKDAY = {"start": "10:00", "end": "19:00", "timezone": "Europe/Moscow", "reminders_enabled": False}
+logger = logging.getLogger(__name__)
+CRM_CACHE_SECONDS = 60
+_crm_cache: dict[tuple[int, str], tuple[float, dict]] = {}
+
+
+static_path = Path(__file__).resolve().parent.parent / "static" / "manager"
+# Configuration is deliberately not loaded at import time: the main test suite
+# patches it after importing app.main. No database is opened before initialize().
+store = Store(Path("data/manager_planner.sqlite3"))
+
+
+def initialize() -> None:
+    """Create/migrate only the isolated Lead Flow planner database."""
+    global store
+    configured_path = Path(get_settings().manager_planner_database_path)
+    if store.path != configured_path:
+        store = Store(configured_path)
+    store.initialize()
+
+
+def create_app() -> FastAPI:
+    app = FastAPI(title="План дня · Lead Flow", docs_url=None, redoc_url=None, openapi_url=None)
+    app.state.store = store
+
+    @app.exception_handler(DomainError)
+    async def domain_error(request, exc):
+        return JSONResponse({"detail": exc.message}, status_code=exc.status)
+
+    @app.exception_handler(sqlite3.IntegrityError)
+    async def conflict(request, exc):
+        return JSONResponse({"detail": "Запись уже существует или конфликтует с другим изменением. Обновите данные."}, status_code=409)
+
+    @app.exception_handler(sqlite3.Error)
+    async def database_error(request, exc):
+        return JSONResponse({"detail": "Хранилище временно недоступно. Повторите позже."}, status_code=503)
+
+    @app.exception_handler(RequestValidationError)
+    async def invalid_input(request, exc):
+        return JSONResponse({"detail": "Проверьте заполнение полей и допустимые значения."}, status_code=422)
+
+    @app.middleware("http")
+    async def security_headers(request, call_next):
+        response = await call_next(request)
+        response.headers["X-Content-Type-Options"] = "nosniff"
+        response.headers["Referrer-Policy"] = "no-referrer"
+        response.headers["Cache-Control"] = "no-store"
+        response.headers["Content-Security-Policy"] = (
+            "default-src 'self'; script-src 'self' https://telegram.org; style-src 'self' 'unsafe-inline'; "
+            "img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; "
+            "frame-ancestors 'self' https://web.telegram.org https://*.telegram.org"
+        )
+        return response
+
+    def actor(authorization: str | None = Header(default=None)):
+        settings = get_settings()
+        if not authorization or not authorization.startswith("tma "):
+            raise HTTPException(401, "Откройте приложение из Telegram.")
+        try:
+            telegram_id = validate_init_data(authorization[4:], settings.telegram_bot_token)
+        except InvalidInitData as exc:
+            raise HTTPException(401, str(exc)) from None
+        identity = access_registry.authorized_identity(telegram_id)
+        if identity is None:
+            raise HTTPException(403, "Доступ к Planner пока не открыт.")
+        user = store.actor(telegram_id)
+        if identity["role"] != "owner" and user["role"] != identity["role"]:
+            raise HTTPException(403, "Роль Planner не совпадает с перенесённой ролью.")
+        if identity["role"] == "manager" and str(user.get("bitrix_id") or "") != str(identity["bitrix_user_id"] or ""):
+            raise HTTPException(403, "Привязка менеджера к Bitrix не совпадает.")
+        return user
+
+    async def sync_plan_tasks(user: dict, plan: dict) -> None:
+        if plan["status"] == "closed":
+            return
+        employee = store.employee(user, plan["employee_id"])
+        if not employee.get("bitrix_id"):
+            return
+        try:
+            external = await PlannerCRM().tasks(int(employee["bitrix_id"]), plan["day"])
+            store.sync_external_tasks(plan["id"], external)
+        except Exception:
+            # Bitrix availability never blocks the employee's manual plan.
+            logger.exception(
+                "Planner Bitrix task sync failed employee_id=%s day=%s",
+                employee["id"], plan["day"],
+            )
+
+    @app.get("/api/me")
+    def me(user=Depends(actor)):
+        return {"user": user, "today": today(), "timezone": "Europe/Moscow", "workday": WORKDAY, "crm": CRM_STATUS}
+
+    @app.get("/healthz", include_in_schema=False)
+    def health():
+        try:
+            with store.connection() as connection:
+                connection.execute("SELECT 1 FROM plans LIMIT 1").fetchone()
+        except sqlite3.Error:
+            return JSONResponse({"status": "unavailable"}, status_code=503)
+        return {"status": "ok"}
+
+    @app.get("/api/employees")
+    def employees(user=Depends(actor)):
+        return store.employees(user)
+
+    @app.get("/api/distributions")
+    def distributions(employee_id: int | None = None, user=Depends(actor)):
+        from .sync import distribution_notices
+        return distribution_notices(store, user, employee_id)
+
+    @app.post("/api/employees", status_code=201)
+    def add_employee(body: EmployeeInput, user=Depends(actor)):
+        return store.save_employee(user, body.model_dump())
+
+    @app.patch("/api/employees/{employee_id}")
+    def edit_employee(employee_id: int, body: EmployeePatch, user=Depends(actor)):
+        return store.save_employee(user, body.model_dump(), employee_id)
+
+    @app.get("/api/plans")
+    def plans(employee_id: int | None = None, day: date | None = None, user=Depends(actor)):
+        return store.list_plans(user, employee_id, day.isoformat() if day else None)
+
+    @app.post("/api/plans", status_code=201)
+    async def add_plan(body: PlanInput, user=Depends(actor)):
+        result = store.create_plan(user, body.day.isoformat(), body.employee_id, body.from_previous)
+        await sync_plan_tasks(user, result)
+        return store.get_plan(user, result["id"])
+
+    @app.get("/api/plans/{plan_id}")
+    async def plan(plan_id: int, user=Depends(actor)):
+        result = store.get_plan(user, plan_id)
+        await sync_plan_tasks(user, result)
+        return store.get_plan(user, plan_id)
+
+    @app.get("/api/crm/summary")
+    async def crm_summary(employee_id: int | None = None, day: date | None = None, user=Depends(actor)):
+        employee = store.employee(user, employee_id)
+        selected_day = (day or date.fromisoformat(today())).isoformat()
+        if not employee.get("bitrix_id"):
+            return {
+                "available": False, "day": selected_day,
+                "message": "Сотрудник не привязан к Bitrix24.",
+            }
+        key = (int(employee["bitrix_id"]), selected_day)
+        cached = _crm_cache.get(key)
+        if cached and time.monotonic() - cached[0] < CRM_CACHE_SECONDS:
+            return cached[1]
+        try:
+            result = await PlannerCRM().summary(key[0], key[1])
+        except Exception:
+            logger.exception("Planner CRM summary failed bitrix_id=%s day=%s", *key)
+            return {
+                "available": False, "day": selected_day,
+                "message": "Bitrix24 временно недоступен. План продолжает работать.",
+            }
+        _crm_cache[key] = (time.monotonic(), result)
+        return result
+
+    @app.post("/api/plans/{plan_id}/approve")
+    def approve(plan_id: int, user=Depends(actor)):
+        return store.approve_plan(user, plan_id)
+
+    @app.post("/api/plans/{plan_id}/confirm")
+    def confirm(plan_id: int, user=Depends(actor)):
+        return store.confirm_plan(user, plan_id)
+
+    @app.post("/api/plans/{plan_id}/close")
+    def close(plan_id: int, user=Depends(actor)):
+        return store.close_plan(user, plan_id)
+
+    @app.get("/api/plans/{plan_id}/report")
+    def report(plan_id: int, user=Depends(actor)):
+        return store.report(user, plan_id)
+
+    @app.get("/api/plans/{plan_id}/history")
+    def history(plan_id: int, user=Depends(actor)):
+        return store.history(user, plan_id)
+
+    @app.post("/api/plans/{plan_id}/tasks", status_code=201)
+    def add_task(plan_id: int, body: TaskInput, user=Depends(actor)):
+        return store.add_task(user, plan_id, body.model_dump())
+
+    @app.patch("/api/tasks/{task_id}")
+    def edit_task(task_id: int, body: TaskPatch, user=Depends(actor)):
+        return store.patch_task(user, task_id, body.model_dump(exclude_unset=True))
+
+    @app.post("/api/tasks/{task_id}/timer")
+    def timer(task_id: int, body: TimerInput, user=Depends(actor)):
+        return store.timer(user, task_id, body.action)
+
+    @app.post("/api/tasks/{task_id}/move")
+    def move(task_id: int, body: MoveInput, user=Depends(actor)):
+        return store.move(user, task_id, body.day.isoformat(), body.reason, body.revision)
+
+    @app.post("/api/tasks/{task_id}/requests", status_code=201)
+    def goal_request(task_id: int, body: GoalInput, user=Depends(actor)):
+        return store.request_goal(user, task_id, body.model_dump())
+
+    @app.get("/api/requests")
+    def requests(user=Depends(actor)):
+        return store.requests(user)
+
+    @app.post("/api/requests/{request_id}/decision")
+    def decision(request_id: int, body: DecisionInput, user=Depends(actor)):
+        return store.decide(user, request_id, body.decision, body.comment)
+
+    if static_path.is_dir():
+        app.mount("/", StaticFiles(directory=static_path, html=True), name="manager-miniapp")
+    return app
+
+
+app = create_app()

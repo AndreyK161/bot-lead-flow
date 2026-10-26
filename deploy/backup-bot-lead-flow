@@ -1,0 +1,56 @@
+#!/bin/sh
+set -eu
+
+backup_dir="/opt/pravburo/bot-lead-flow/backups/automatic"
+container="bot-lead-flow-postgres-1"
+app_container="bot-lead-flow-bot-lead-flow-1"
+database="bot_lead_flow"
+database_user="bot_lead_flow"
+stamp="$(date -u +%Y%m%dT%H%M%SZ)"
+container_dump="/tmp/bot-lead-flow-${stamp}.dump"
+container_planner="/tmp/manager-planner-${stamp}.sqlite3"
+final_dump="${backup_dir}/bot-lead-flow-${stamp}.dump"
+partial_dump="${final_dump}.partial"
+final_planner="${backup_dir}/manager-planner-${stamp}.sqlite3"
+partial_planner="${final_planner}.partial"
+
+cleanup() {
+    docker exec "$container" rm -f -- "$container_dump" >/dev/null 2>&1 || true
+    docker exec "$app_container" rm -f -- "$container_planner" >/dev/null 2>&1 || true
+    rm -f -- "$partial_dump" "$partial_planner"
+}
+trap cleanup EXIT INT TERM
+
+install -d -m 700 "$backup_dir"
+
+docker exec "$container" pg_dump \
+    -U "$database_user" \
+    -d "$database" \
+    --format=custom \
+    --file="$container_dump"
+
+# A corrupt or incomplete archive never becomes a published backup.
+docker exec "$container" pg_restore --list "$container_dump" >/dev/null
+docker cp "${container}:${container_dump}" "$partial_dump" >/dev/null
+chmod 600 "$partial_dump"
+mv "$partial_dump" "$final_dump"
+
+# SQLite's online backup API produces a consistent snapshot while the Planner
+# remains available. The source is deliberately the isolated Lead Flow DB.
+docker exec "$app_container" python -c \
+    "import sqlite3; source=sqlite3.connect('/app/data/manager_planner.sqlite3'); target=sqlite3.connect('${container_planner}'); source.backup(target); target.close(); source.close()"
+docker exec "$app_container" python -c \
+    "import sqlite3; db=sqlite3.connect('${container_planner}'); assert db.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'; db.close()"
+docker cp "${app_container}:${container_planner}" "$partial_planner" >/dev/null
+chmod 600 "$partial_planner"
+mv "$partial_planner" "$final_planner"
+
+# Only scheduled archives in the dedicated directory are rotated.
+find "$backup_dir" -maxdepth 1 -type f \
+    -name 'bot-lead-flow-????????T??????Z.dump' -mtime +30 -delete
+find "$backup_dir" -maxdepth 1 -type f \
+    -name 'manager-planner-????????T??????Z.sqlite3' -mtime +30 -delete
+
+printf 'Lead Flow backups created: %s (%s bytes), %s (%s bytes)\n' \
+    "$final_dump" "$(wc -c < "$final_dump")" \
+    "$final_planner" "$(wc -c < "$final_planner")"

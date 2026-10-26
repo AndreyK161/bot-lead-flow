@@ -12,8 +12,9 @@ import httpx
 
 from app import stats, store
 from app.bitrix_client import BitrixApiError, BitrixClient
-from app.config import get_settings
+from app.config import get_settings, lead_notification_recipient_ids
 from app.formatter import build_lead_notification, build_manage_keyboard
+from app.sales_team import assignable_sales_users
 from app.telegram_client import edit_message_text, send_telegram_message
 
 logger = logging.getLogger(__name__)
@@ -101,7 +102,10 @@ async def card(row):
         keyboard.append([button("✖️ Отменить", f"mc:{row['id']}")])
         text += "\n\nВыберите источник:"
     elif state == "manager":
-        users = await BitrixClient().get_department_users(get_settings().sales_department_id)
+        settings = get_settings()
+        users = assignable_sales_users(
+            await BitrixClient().get_department_users(settings.sales_department_id), settings,
+        )
         buttons = [button(
             " ".join(part for part in (user.get("NAME"), user.get("LAST_NAME")) if part) or user.get("EMAIL") or str(user["ID"]),
             f"mm:{row['id']}:{user['ID']}",
@@ -156,7 +160,7 @@ async def sync(row):
 
 
 def destinations():
-    return [str(user_id) for user_id in get_settings().director_user_id_set]
+    return [str(user_id) for user_id in lead_notification_recipient_ids(get_settings())]
 
 
 def deliveries(row):
@@ -363,7 +367,9 @@ async def handle_main_callback(callback_query, update_id) -> bool:
                 return True
             store.save(row["id"], source_id=source[0]["id"], source_name=source[0]["name"], state="manager", dirty=1)
         elif action == "mm" and row["state"] == "manager" and len(parts) == 3:
-            users = await BitrixClient().get_department_users(settings.sales_department_id)
+            users = assignable_sales_users(
+                await BitrixClient().get_department_users(settings.sales_department_id), settings,
+            )
             selected = next((user for user in users if str(user["ID"]) == parts[2]), None)
             if not selected:
                 await send(chat_id, "Сотрудник больше не входит в отдел продаж.")

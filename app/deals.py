@@ -5,9 +5,9 @@ import asyncio
 import logging
 from urllib.parse import urlparse
 
-from app import stats, store
+from app import deal_rules, stats, store
 from app.bitrix_client import BitrixClient
-from app.config import get_settings
+from app.config import get_settings, lead_notification_recipient_ids
 from app.formatter import build_deal_manage_keyboard, build_deal_notification
 from app.telegram_client import edit_message_text, send_telegram_message
 
@@ -17,7 +17,7 @@ CURSOR_KEY = "sales_deal_cursor"
 
 
 def destinations() -> list[str]:
-    return [str(chat_id) for chat_id in get_settings().director_user_id_set]
+    return [str(chat_id) for chat_id in lead_notification_recipient_ids(get_settings())]
 
 
 def deliveries(deal_id: str) -> list[dict]:
@@ -93,8 +93,12 @@ async def track(deal_id: str | int) -> bool:
     deal_id = str(deal_id)
     client = BitrixClient()
     deal = await client.get_deal(deal_id)
-    if str(deal.get("CATEGORY_ID")) != get_settings().track_deal_category_id:
-        return False
+    settings = get_settings()
+    deal = await deal_rules.apply_event_rules(deal, client, created=True, settings=settings)
+    if str(deal.get("CATEGORY_ID")) != settings.track_deal_category_id:
+        return str(deal.get("CATEGORY_ID")) == getattr(
+            settings, "accompaniment_deal_category_id", "2",
+        )
     store.execute("INSERT INTO deal_notifications (deal_id) VALUES (?) ON CONFLICT DO NOTHING", (deal_id,))
     await publish(deal_id)
     return True
@@ -104,7 +108,9 @@ async def observe_update(deal_id: str | int) -> bool:
     """Refresh analytics from Bitrix without sending a new-deal notification."""
     client = BitrixClient()
     deal = await client.get_deal(deal_id)
-    if str(deal.get("CATEGORY_ID")) != get_settings().track_deal_category_id:
+    settings = get_settings()
+    deal = await deal_rules.apply_event_rules(deal, client, created=False, settings=settings)
+    if str(deal.get("CATEGORY_ID")) != settings.track_deal_category_id:
         return False
     await stats.observe("deal", deal, client)
     return True

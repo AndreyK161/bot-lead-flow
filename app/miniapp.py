@@ -12,11 +12,19 @@ from pathlib import Path
 from urllib.parse import parse_qsl
 from uuid import uuid4
 
+import httpx
 from fastapi import APIRouter, HTTPException, Request, status
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 
+from app.client_registry import build_clients_workbook, collect_clients
 from app.config import get_settings
 from app.period_reports import collect_live_period
+from app.call_tracking import today_payload
+from app.worktime import build_worktime_workbook, collect_worktime
+from app.task_reports import build_task_workbook, collect_task_report
+from app.standard_exports import build_standard_sales_workbook, collect_standard_sales_export
+from app.telephony_exports import build_telephony_workbook, collect_telephony_export
+from app import planner_access
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -28,6 +36,14 @@ _cache: dict[tuple[date, date], tuple[float, dict]] = {}
 _cache_locks: dict[tuple[date, date], asyncio.Lock] = {}
 _jobs: dict[str, dict] = {}
 JOB_TTL_SECONDS = 900
+PRESENCE_CACHE_SECONDS = 30
+_presence_cache: tuple[float, dict] | None = None
+_clients_cache: tuple[float, dict] | None = None
+_clients_lock = asyncio.Lock()
+_worktime_cache: dict[tuple[date, date], tuple[float, dict]] = {}
+_task_cache: dict[tuple[date, date], tuple[float, dict]] = {}
+_sales_export_cache: dict[tuple[date, date], tuple[float, dict]] = {}
+_telephony_export_cache: dict[tuple[date, date], tuple[float, dict]] = {}
 
 
 def validate_init_data(init_data: str, bot_token: str, *, now: int | None = None) -> dict:
@@ -59,8 +75,12 @@ def _authorized_user(request: Request) -> int:
         user_id = int(user["id"])
     except (ValueError, KeyError, TypeError):
         raise HTTPException(status_code=status.HTTP_401_UNAUTHORIZED, detail="Open this report from Telegram")
-    allowed_users = settings.director_user_id_set | settings.admin_user_id_set
-    if user_id not in allowed_users:
+    allowed_users = (
+        settings.director_user_id_set
+        | settings.admin_user_id_set
+        | getattr(settings, "super_admin_user_id_set", set())
+    )
+    if user_id not in allowed_users and user_id not in planner_access.enabled_user_ids(role="supervisor"):
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Access denied")
     return user_id
 
@@ -210,6 +230,202 @@ async def mini_app_report(request: Request, start: date, end: date) -> dict:
     _authorized_user(request)
     _validate_period(start, end)
     return await _cached_report(start, end)
+
+
+@router.get("/api/miniapp/access")
+async def mini_app_access(request: Request) -> dict:
+    _authorized_user(request)
+    return {"calls": True}
+
+
+@router.get("/api/miniapp/calls/today")
+async def mini_app_calls_today(request: Request) -> dict:
+    _authorized_user(request)
+    return await today_payload()
+
+
+async def _cached_clients() -> dict:
+    global _clients_cache
+    now = time.monotonic()
+    if _clients_cache and now - _clients_cache[0] < CACHE_SECONDS:
+        return _clients_cache[1]
+    async with _clients_lock:
+        now = time.monotonic()
+        if _clients_cache and now - _clients_cache[0] < CACHE_SECONDS:
+            return _clients_cache[1]
+        payload = await collect_clients()
+        _clients_cache = (now, payload)
+        return payload
+
+
+@router.get("/api/miniapp/clients")
+async def mini_app_clients(request: Request) -> dict:
+    _authorized_user(request)
+    return await _cached_clients()
+
+
+@router.get("/api/miniapp/clients.xlsx")
+async def mini_app_clients_excel(request: Request) -> Response:
+    _authorized_user(request)
+    content = build_clients_workbook(await _cached_clients())
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="clients.xlsx"'},
+    )
+
+
+async def _cached_worktime(start: date, end: date) -> dict:
+    key = (start, end)
+    cached = _worktime_cache.get(key)
+    if cached and time.monotonic() - cached[0] < PRESENCE_CACHE_SECONDS:
+        return cached[1]
+    payload = await collect_worktime(start, end)
+    _worktime_cache[key] = (time.monotonic(), payload)
+    return payload
+
+
+def _validate_worktime_period(start: date, end: date) -> None:
+    if start > end or (end - start).days > 31:
+        raise HTTPException(status_code=400, detail="Выберите период не больше 32 дней")
+
+
+@router.get("/api/miniapp/worktime")
+async def mini_app_worktime(request: Request, start: date, end: date) -> dict:
+    _authorized_user(request)
+    _validate_worktime_period(start, end)
+    return await _cached_worktime(start, end)
+
+
+@router.get("/api/miniapp/worktime.xlsx")
+async def mini_app_worktime_excel(request: Request, start: date, end: date) -> Response:
+    _authorized_user(request)
+    _validate_worktime_period(start, end)
+    content = build_worktime_workbook(await _cached_worktime(start, end))
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="worktime.xlsx"'},
+    )
+
+
+async def _cached_tasks(start: date, end: date) -> dict:
+    key = (start, end)
+    cached = _task_cache.get(key)
+    if cached and time.monotonic() - cached[0] < CACHE_SECONDS:
+        return cached[1]
+    payload = await collect_task_report(start, end)
+    _task_cache[key] = (time.monotonic(), payload)
+    return payload
+
+
+@router.get("/api/miniapp/tasks")
+async def mini_app_tasks(request: Request, start: date, end: date) -> dict:
+    _authorized_user(request)
+    _validate_worktime_period(start, end)
+    return await _cached_tasks(start, end)
+
+
+@router.get("/api/miniapp/tasks.xlsx")
+async def mini_app_tasks_excel(request: Request, start: date, end: date) -> Response:
+    _authorized_user(request)
+    _validate_worktime_period(start, end)
+    content = build_task_workbook(await _cached_tasks(start, end))
+    return Response(
+        content=content,
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="tasks.xlsx"'},
+    )
+
+
+@router.get("/api/miniapp/sales.xlsx")
+async def mini_app_standard_sales_excel(request: Request, start: date, end: date) -> Response:
+    _authorized_user(request)
+    _validate_period(start, end)
+    key = (start, end)
+    cached = _sales_export_cache.get(key)
+    if cached and time.monotonic() - cached[0] < CACHE_SECONDS:
+        payload = cached[1]
+    else:
+        payload = await collect_standard_sales_export(start, end)
+        _sales_export_cache[key] = (time.monotonic(), payload)
+    return Response(
+        content=build_standard_sales_workbook(payload),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="sales.xlsx"'},
+    )
+
+
+@router.get("/api/miniapp/telephony.xlsx")
+async def mini_app_telephony_excel(request: Request, start: date, end: date) -> Response:
+    _authorized_user(request)
+    _validate_period(start, end)
+    key = (start, end)
+    cached = _telephony_export_cache.get(key)
+    if cached and time.monotonic() - cached[0] < CACHE_SECONDS:
+        payload = cached[1]
+    else:
+        payload = await collect_telephony_export(start, end)
+        _telephony_export_cache[key] = (time.monotonic(), payload)
+    return Response(
+        content=build_telephony_workbook(payload),
+        media_type="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+        headers={"Content-Disposition": 'attachment; filename="telephony.xlsx"'},
+    )
+
+
+def _presence_payload(items: list[dict]) -> dict:
+    allowed_statuses = {"working", "break", "offline", "unknown"}
+    managers = []
+    for item in items:
+        presence_status = str(item.get("presence_status") or "unknown")
+        if presence_status not in allowed_statuses:
+            presence_status = "unknown"
+        managers.append({
+            "id": item.get("id"),
+            "name": str(item.get("full_name") or "Менеджер"),
+            "status": presence_status,
+            "changed_at": item.get("presence_changed_at"),
+            "checked_at": item.get("presence_checked_at"),
+            "workday_started_at": item.get("workday_started_at"),
+            "lunch_started_at": item.get("lunch_started_at"),
+        })
+    checked = [item["checked_at"] for item in managers if item.get("checked_at")]
+    return {
+        "managers": managers,
+        "checked_at": max(checked) if checked else None,
+        "refresh_seconds": 60,
+        "unavailable": False,
+    }
+
+
+async def _manager_presence_payload() -> dict:
+    global _presence_cache
+    now = time.monotonic()
+    if _presence_cache and now - _presence_cache[0] < PRESENCE_CACHE_SECONDS:
+        return _presence_cache[1]
+    settings = get_settings()
+    if not settings.leadflow_presence_url or not settings.leadflow_presence_token:
+        return {"managers": [], "checked_at": None, "refresh_seconds": 60, "unavailable": True}
+    try:
+        async with httpx.AsyncClient(timeout=5.0) as client:
+            response = await client.get(
+                settings.leadflow_presence_url,
+                headers={"X-Internal-Token": settings.leadflow_presence_token},
+            )
+            response.raise_for_status()
+        payload = _presence_payload(response.json())
+    except (httpx.HTTPError, ValueError, TypeError):
+        logger.exception("Cannot load manager presence from LeadFlow")
+        payload = {"managers": [], "checked_at": None, "refresh_seconds": 60, "unavailable": True}
+    _presence_cache = (now, payload)
+    return payload
+
+
+@router.get("/api/miniapp/managers/presence")
+async def mini_app_manager_presence(request: Request) -> dict:
+    _authorized_user(request)
+    return await _manager_presence_payload()
 
 
 @router.post("/api/miniapp/report/jobs")

@@ -9,7 +9,7 @@ from datetime import date, datetime, time
 from html import escape
 from zoneinfo import ZoneInfo
 
-from app import stats, store
+from app import deal_rules, stats, store
 from app.bitrix_client import DEAL_SELECT_FIELDS, BitrixClient
 from app.config import get_settings
 
@@ -179,18 +179,29 @@ async def sync_once(*, now: datetime | None = None, client: BitrixClient | None 
                 await stats.observe("deal", deal, client)
 
         contract_field = settings.contract_source_url_field
+        contract_date_field = getattr(
+            settings, "deal_contract_date_field", "UF_CRM_CONTRACT_DATE_OP",
+        )
         contract_cursor = int(_metadata(CONTRACT_CURSOR_KEY) or "0")
         new_contracts = await client.get_category_deals_after_id(
             settings.accompaniment_deal_category_id,
             contract_cursor,
-            extra_fields=[contract_field],
+            extra_fields=[contract_field, contract_date_field],
         )
+        new_contracts = [
+            await deal_rules.stamp_contract_date(
+                contract, client, settings=settings, created=True,
+            )
+            for contract in new_contracts
+        ]
         known_contract_ids = list(dict.fromkeys(
             str(row["contract_deal_id"]) for row in rows if row.get("contract_deal_id")
         ))
         known_contracts = await client.get_deals_by_ids(
             known_contract_ids,
-            select=list(dict.fromkeys(DEAL_SELECT_FIELDS + [contract_field])),
+            select=list(dict.fromkeys(
+                DEAL_SELECT_FIELDS + [contract_field, contract_date_field]
+            )),
         )
         contracts_by_source = _match_contracts(
             [*known_contracts, *new_contracts], list(sales_by_id.values()), contract_field,
@@ -234,7 +245,11 @@ async def sync_once(*, now: datetime | None = None, client: BitrixClient | None 
                 outcome_stage = str(contract.get("STAGE_ID") or "")
                 outcome_name = accompaniment_names.get(outcome_stage, outcome_stage or "Без стадии")
                 contract_id = outcome_id
-                contract_at = original.get("contract_at") or str(contract.get("DATE_CREATE") or checked_at.isoformat())
+                contract_at = original.get("contract_at") or str(
+                    contract.get(contract_date_field)
+                    or contract.get("DATE_CREATE")
+                    or checked_at.isoformat()
+                )
             elif related:
                 outcome_type = "deal"
                 outcome_id = str(related["ID"])

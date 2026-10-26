@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import sqlite3
+import json
 from contextlib import contextmanager
 from pathlib import Path
 from threading import Lock
@@ -36,6 +37,39 @@ def _schema(*, postgres: bool) -> str:
             telegram_id BIGINT PRIMARY KEY, username TEXT, first_name TEXT,
             started_at {timestamp} DEFAULT CURRENT_TIMESTAMP
         );
+        CREATE TABLE IF NOT EXISTS user_ui_modes (
+            telegram_id BIGINT PRIMARY KEY,
+            mode TEXT NOT NULL CHECK(mode IN ('supervisor','manager')),
+            updated_at {timestamp} DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS distribution_sessions (
+            telegram_id BIGINT PRIMARY KEY,
+            session_id TEXT NOT NULL,
+            step TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            updated_at {timestamp} DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE TABLE IF NOT EXISTS distribution_reminders (
+            chat_id BIGINT NOT NULL,
+            thread_id BIGINT NOT NULL DEFAULT 0,
+            enabled_by BIGINT NOT NULL,
+            enabled INTEGER NOT NULL DEFAULT 1,
+            last_attempt_date TEXT,
+            PRIMARY KEY (chat_id,thread_id)
+        );
+        CREATE TABLE IF NOT EXISTS planner_access (
+            telegram_id BIGINT PRIMARY KEY,
+            bitrix_user_id TEXT,
+            display_name TEXT NOT NULL,
+            role TEXT NOT NULL CHECK(role IN ('owner','manager','supervisor')),
+            active INTEGER NOT NULL DEFAULT 1,
+            login_enabled INTEGER NOT NULL DEFAULT 0,
+            source TEXT NOT NULL DEFAULT 'manual',
+            legacy_created_at TEXT,
+            updated_at {timestamp} DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_planner_access_bitrix
+            ON planner_access(bitrix_user_id) WHERE bitrix_user_id IS NOT NULL;
         CREATE TABLE IF NOT EXISTS manager_links (
             bitrix_user_id TEXT NOT NULL, bitrix_name TEXT, telegram_id BIGINT NOT NULL,
             linked_at {timestamp} DEFAULT CURRENT_TIMESTAMP,
@@ -92,6 +126,20 @@ def _schema(*, postgres: bool) -> str:
             report_date TEXT NOT NULL, chat_id TEXT NOT NULL, message_id BIGINT,
             PRIMARY KEY (report_date, chat_id)
         );
+        CREATE TABLE IF NOT EXISTS megafon_calls (
+            call_id TEXT PRIMARY KEY,
+            manager_extension TEXT, direction TEXT, client_phone TEXT,
+            started_at {timestamp} NOT NULL, duration_seconds INTEGER NOT NULL DEFAULT 0,
+            wait_seconds INTEGER NOT NULL DEFAULT 0,
+            call_status TEXT, recording_url TEXT,
+            processing_status TEXT NOT NULL DEFAULT 'pending', transcript TEXT,
+            outcome_kind TEXT, next_call_at TEXT, rejection_reason TEXT,
+            outcome_summary TEXT, last_error TEXT,
+            created_at {timestamp} NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at {timestamp} NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_megafon_calls_phone_started
+            ON megafon_calls(client_phone,started_at);
     '''
 
 
@@ -106,6 +154,12 @@ class _Connection:
 
 def _initialize_sqlite(conn: sqlite3.Connection) -> None:
     conn.executescript(_schema(postgres=False))
+    # One Bitrix employee may use more than one explicitly authorized Telegram account.
+    conn.execute("DROP INDEX IF EXISTS idx_planner_access_bitrix")
+    conn.execute(
+        "CREATE INDEX idx_planner_access_bitrix ON planner_access(bitrix_user_id) "
+        "WHERE bitrix_user_id IS NOT NULL"
+    )
     link_columns = list(conn.execute("PRAGMA table_info(manager_links)"))
     link_primary_key = [row[1] for row in sorted(link_columns, key=lambda row: row[5]) if row[5]]
     if link_primary_key == ["bitrix_user_id"]:
@@ -142,6 +196,9 @@ def _initialize_sqlite(conn: sqlite3.Connection) -> None:
     ):
         if name not in crm_columns:
             conn.execute(f"ALTER TABLE crm_items ADD COLUMN {name} TEXT")
+    call_columns = {row[1] for row in conn.execute("PRAGMA table_info(megafon_calls)")}
+    if "wait_seconds" not in call_columns:
+        conn.execute("ALTER TABLE megafon_calls ADD COLUMN wait_seconds INTEGER NOT NULL DEFAULT 0")
 
 
 def _initialize_postgres(conn) -> None:
@@ -149,6 +206,8 @@ def _initialize_postgres(conn) -> None:
         if statement.strip():
             conn.execute(statement)
     for statement in (
+        "DROP INDEX IF EXISTS idx_planner_access_bitrix",
+        "CREATE INDEX idx_planner_access_bitrix ON planner_access(bitrix_user_id) WHERE bitrix_user_id IS NOT NULL",
         "ALTER TABLE manager_links DROP CONSTRAINT IF EXISTS manager_links_pkey",
         "ALTER TABLE manager_links ADD CONSTRAINT manager_links_pkey PRIMARY KEY (bitrix_user_id,telegram_id)",
         "CREATE UNIQUE INDEX IF NOT EXISTS idx_manager_links_telegram_id ON manager_links(telegram_id)",
@@ -169,6 +228,7 @@ def _initialize_postgres(conn) -> None:
         "ALTER TABLE crm_items ADD COLUMN IF NOT EXISTS contract_deal_id TEXT",
         "ALTER TABLE crm_items ADD COLUMN IF NOT EXISTS contract_at TEXT",
         "ALTER TABLE crm_items ADD COLUMN IF NOT EXISTS outcome_checked_at TEXT",
+        "ALTER TABLE megafon_calls ADD COLUMN IF NOT EXISTS wait_seconds INTEGER NOT NULL DEFAULT 0",
     ):
         conn.execute(statement)
 
@@ -251,6 +311,122 @@ def record_start(telegram_id, username, first_name):
 
 def recent_starts(limit=20):
     return rows("SELECT * FROM telegram_starts ORDER BY started_at DESC LIMIT ?", (limit,))
+
+
+def user_ui_mode(telegram_id: int) -> str:
+    result = rows("SELECT mode FROM user_ui_modes WHERE telegram_id=?", (telegram_id,))
+    return result[0]["mode"] if result else "supervisor"
+
+
+def set_user_ui_mode(telegram_id: int, mode: str) -> None:
+    if mode not in {"supervisor", "manager"}:
+        raise ValueError("Unknown UI mode")
+    execute(
+        "INSERT INTO user_ui_modes (telegram_id,mode,updated_at) VALUES (?,?,CURRENT_TIMESTAMP) "
+        "ON CONFLICT(telegram_id) DO UPDATE SET mode=excluded.mode,updated_at=CURRENT_TIMESTAMP",
+        (telegram_id, mode),
+    )
+
+
+def distribution_session(telegram_id: int) -> dict | None:
+    result = rows("SELECT * FROM distribution_sessions WHERE telegram_id=?", (telegram_id,))
+    if not result:
+        return None
+    session = result[0]
+    try:
+        payload = json.loads(session.pop("payload_json"))
+    except (TypeError, ValueError):
+        return None
+    return {**session, "payload": payload}
+
+
+def save_distribution_session(telegram_id: int, session_id: str, step: str, payload: dict) -> None:
+    execute(
+        "INSERT INTO distribution_sessions (telegram_id,session_id,step,payload_json,updated_at) "
+        "VALUES (?,?,?,?,CURRENT_TIMESTAMP) ON CONFLICT(telegram_id) DO UPDATE SET "
+        "session_id=excluded.session_id,step=excluded.step,payload_json=excluded.payload_json,"
+        "updated_at=CURRENT_TIMESTAMP",
+        (telegram_id, session_id, step, json.dumps(payload, ensure_ascii=False, separators=(",", ":"))),
+    )
+
+
+def clear_distribution_session(telegram_id: int) -> None:
+    execute("DELETE FROM distribution_sessions WHERE telegram_id=?", (telegram_id,))
+
+
+def set_distribution_reminder(chat_id: int, enabled_by: int, enabled: bool, thread_id: int = 0) -> None:
+    execute(
+        "INSERT INTO distribution_reminders (chat_id,thread_id,enabled_by,enabled) VALUES (?,?,?,?) "
+        "ON CONFLICT(chat_id,thread_id) DO UPDATE SET enabled_by=excluded.enabled_by,enabled=excluded.enabled",
+        (chat_id, thread_id, enabled_by, int(enabled)),
+    )
+
+
+def distribution_reminders() -> list[dict]:
+    return rows(
+        "SELECT chat_id,thread_id,enabled_by,last_attempt_date FROM distribution_reminders "
+        "WHERE enabled=1 ORDER BY chat_id,thread_id"
+    )
+
+
+def claim_distribution_reminder(chat_id: int, thread_id: int, day: str) -> bool:
+    with db() as conn:
+        cursor = conn.execute(
+            "UPDATE distribution_reminders SET last_attempt_date=? "
+            "WHERE chat_id=? AND thread_id=? AND enabled=1 "
+            "AND (last_attempt_date IS NULL OR last_attempt_date<?)",
+            (day, chat_id, thread_id, day),
+        )
+        return cursor.rowcount == 1
+
+
+def upsert_planner_access(
+    telegram_id: int,
+    *,
+    bitrix_user_id: str | None,
+    display_name: str,
+    role: str,
+    active: bool,
+    source: str,
+    legacy_created_at: str | None = None,
+    login_enabled_on_insert: bool = False,
+) -> None:
+    if role not in {"owner", "manager", "supervisor"}:
+        raise ValueError("Unknown planner role")
+    execute(
+        "INSERT INTO planner_access "
+        "(telegram_id,bitrix_user_id,display_name,role,active,login_enabled,source,legacy_created_at,updated_at) "
+        "VALUES (?,?,?,?,?,?,?,?,CURRENT_TIMESTAMP) "
+        "ON CONFLICT(telegram_id) DO UPDATE SET "
+        "bitrix_user_id=excluded.bitrix_user_id,display_name=excluded.display_name,"
+        "role=excluded.role,active=excluded.active,source=excluded.source,"
+        "legacy_created_at=excluded.legacy_created_at,updated_at=CURRENT_TIMESTAMP",
+        (
+            telegram_id, bitrix_user_id, display_name, role, int(active),
+            int(login_enabled_on_insert), source, legacy_created_at,
+        ),
+    )
+
+
+def planner_access(telegram_id: int) -> dict | None:
+    result = rows("SELECT * FROM planner_access WHERE telegram_id=?", (telegram_id,))
+    return result[0] if result else None
+
+
+def list_planner_access() -> list[dict]:
+    return rows(
+        "SELECT * FROM planner_access "
+        "ORDER BY CASE role WHEN 'owner' THEN 0 WHEN 'supervisor' THEN 1 ELSE 2 END,display_name,telegram_id"
+    )
+
+
+def set_planner_login_enabled(telegram_id: int, enabled: bool) -> bool:
+    with db() as conn:
+        cursor = conn.execute(
+            "UPDATE planner_access SET login_enabled=?,updated_at=CURRENT_TIMESTAMP WHERE telegram_id=?",
+            (int(enabled), telegram_id),
+        )
+        return cursor.rowcount == 1
 
 
 def link_manager(bitrix_user_id, bitrix_name, telegram_id):

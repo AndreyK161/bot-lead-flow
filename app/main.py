@@ -6,13 +6,21 @@ import asyncio
 import hashlib
 import logging
 from contextlib import asynccontextmanager, suppress
+from pathlib import Path
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request, status
 
-from app import deals, journal, manual, miniapp, outcomes, period_reports, reconcile, reports, stats, store
-from app.bitrix_client import BitrixApiError, BitrixClient, close_http_client
-from app.config import get_settings
+from app import call_tracking, deals, distribution_flow, journal, manual, miniapp, outcomes, period_reports, planner_access, reconcile, reports, stats, store
+from app.manager_planner.api import app as manager_planner_app, initialize as initialize_manager_planner
+from app.manager_planner import api as manager_planner_api, sync as planner_distribution_sync
+from app.bitrix_client import (
+    LEAD_PREFERRED_CALL_TIME_FIELD,
+    BitrixApiError,
+    BitrixClient,
+    close_http_client,
+)
+from app.config import get_settings, lead_notification_recipient_ids
 from app.formatter import (
     build_action_keyboard,
     build_assign_keyboard,
@@ -24,6 +32,7 @@ from app.formatter import (
     build_link_target_keyboard,
     build_manage_keyboard,
 )
+from app.sales_team import assignable_sales_users
 from app.telegram_client import (
     answer_callback_query,
     edit_message_reply_markup,
@@ -41,9 +50,13 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 @asynccontextmanager
 async def lifespan(app):
     settings = get_settings()
-    for account_id in settings.mini_app_user_id_set:
+    planner_access.seed_legacy_identities()
+    initialize_manager_planner()
+    menu_user_ids = settings.mini_app_user_id_set | planner_access.enabled_user_ids()
+    for account_id in menu_user_ids:
         try:
-            await set_chat_menu_button(settings.mini_app_url, chat_id=account_id)
+            url, label = _mini_app_destination(settings, account_id)
+            await set_chat_menu_button(url, chat_id=account_id, text=label)
         except Exception:
             logger.exception("Failed to configure Mini App menu button for user_id=%s", account_id)
     tasks = [
@@ -53,7 +66,19 @@ async def lifespan(app):
         asyncio.create_task(reconcile.reconciliation_loop()),
         asyncio.create_task(outcomes.daily_sync_loop()),
         asyncio.create_task(_bitrix_event_recovery_loop()),
+        asyncio.create_task(distribution_flow.reminder_loop(settings)),
     ]
+    legacy_queue = str(getattr(settings, "legacy_distribution_queue_path", "") or "").strip()
+    if legacy_queue:
+        confirmer_ids = getattr(settings, "legacy_distribution_confirmer_id_set", set())
+        if not confirmer_ids:
+            raise RuntimeError("LEGACY_DISTRIBUTION_CONFIRMER_IDS must be explicit when the legacy queue bridge is enabled")
+        tasks.append(asyncio.create_task(planner_distribution_sync.sync_loop(
+            manager_planner_api.store,
+            Path(legacy_queue),
+            confirmer_ids,
+            float(getattr(settings, "legacy_distribution_poll_seconds", 30)),
+        )))
     yield
     for task in tasks:
         task.cancel()
@@ -65,14 +90,63 @@ async def lifespan(app):
 
 app = FastAPI(title="bot-lead-flow", lifespan=lifespan)
 app.include_router(miniapp.router)
+app.include_router(call_tracking.router)
+app.mount("/manager", manager_planner_app)
 
 
-def _mini_app_keyboard(settings) -> dict:
+def _mini_app_destination(settings, user_id: int) -> tuple[str, str]:
+    switch_user_id = getattr(settings, "mode_switch_user_id", 1297686797)
+    identity = planner_access.authorized_identity(user_id)
+    manager_mode = (
+        user_id == switch_user_id and store.user_ui_mode(user_id) == "manager"
+    ) or (identity is not None and identity["role"] == "manager")
+    if manager_mode:
+        return getattr(settings, "manager_app_url", "https://tg.prav-buro.ru/manager/"), "План дня"
+    if identity is not None and identity["role"] == "supervisor":
+        return getattr(settings, "manager_app_url", "https://tg.prav-buro.ru/manager/"), "Планы"
+    return settings.mini_app_url, "Отчёты"
+
+
+def _mini_app_keyboard(settings, user_id: int) -> dict:
+    url, label = _mini_app_destination(settings, user_id)
+    identity = planner_access.authorized_identity(user_id)
+    open_button = {
+        "text": "🗓 Открыть план дня" if label == "План дня" else "📊 Открыть отчёты",
+        "web_app": {"url": url},
+    }
+    if user_id == getattr(settings, "mode_switch_user_id", 1297686797):
+        current = store.user_ui_mode(user_id)
+        return {
+            "inline_keyboard": [
+                [open_button],
+                _mode_keyboard(current)["inline_keyboard"][0],
+            ],
+        }
+    if identity is not None and identity["role"] == "supervisor":
+        return {
+            "inline_keyboard": [
+                [{
+                    "text": "🗓 Планы сотрудников",
+                    "web_app": {"url": url},
+                }],
+                [{"text": "📊 Отчёты Lead Flow", "web_app": {"url": settings.mini_app_url}}],
+            ],
+        }
     return {
-        "inline_keyboard": [[{
-            "text": "📊 Открыть отчёты",
-            "web_app": {"url": getattr(settings, "mini_app_url", "https://lead.prav-buro.ru/miniapp")},
-        }]],
+        "inline_keyboard": [[open_button]],
+    }
+
+
+def _mode_keyboard(current: str) -> dict:
+    return {"inline_keyboard": [[
+        {"text": ("✓ " if current == "supervisor" else "") + "Руководитель", "callback_data": "mode:supervisor"},
+        {"text": ("✓ " if current == "manager" else "") + "Менеджер", "callback_data": "mode:manager"},
+    ]]}
+
+
+def _distribution_user_ids(settings) -> set[int]:
+    return planner_access.enabled_user_ids() | {
+        getattr(settings, "mode_switch_user_id", 1297686797)
     }
 
 
@@ -80,6 +154,23 @@ def _portal_domain(webhook_url: str) -> str | None:
     """Достаёт домен портала из адреса входящего вебхука, чтобы собрать ссылку на лид."""
     host = urlparse(webhook_url).netloc
     return host or None
+
+
+def _comment_with_preferred_call_time(lead: dict) -> str | None:
+    """Добавляет выбранное клиентом время звонка, не дублируя строку при повторе события."""
+    raw_value = lead.get(LEAD_PREFERRED_CALL_TIME_FIELD)
+    if isinstance(raw_value, list):
+        call_time = ", ".join(str(value).strip() for value in raw_value if str(value).strip())
+    else:
+        call_time = str(raw_value or "").strip()
+    if not call_time:
+        return None
+
+    line = f"Желаемое время звонка: {call_time}"
+    comments = str(lead.get("COMMENTS") or "").strip()
+    if line.casefold() in comments.casefold():
+        return None
+    return f"{comments}\n{line}" if comments else line
 
 
 async def _process_bitrix_event(event: str, entity_id: str | None) -> dict[str, str]:
@@ -107,6 +198,11 @@ async def _process_bitrix_event(event: str, entity_id: str | None) -> dict[str, 
 
     try:
         lead = await client.get_lead(lead_id)
+        if event == "ONCRMLEADADD":
+            enriched_comments = _comment_with_preferred_call_time(lead)
+            if enriched_comments is not None:
+                await client.update_lead(lead_id, {"COMMENTS": enriched_comments})
+                lead = {**lead, "COMMENTS": enriched_comments}
         store.record_seen_lead(lead)
         await stats.observe("lead", lead, client)
 
@@ -154,7 +250,7 @@ async def _process_bitrix_event(event: str, entity_id: str | None) -> dict[str, 
 
     # Каждому руководителю в личку — уведомление с кнопками управления. Общего чата нет.
     keyboard = build_manage_keyboard(lead_id)
-    for admin_id in settings.director_user_id_set:
+    for admin_id in lead_notification_recipient_ids(settings):
         try:
             await send_telegram_message(message, chat_id=admin_id, reply_markup=keyboard)
         except Exception:
@@ -222,6 +318,8 @@ async def _bitrix_event_recovery_loop() -> None:
 
 async def _notify_assigned_manager(client: BitrixClient, settings, lead_id: str, bitrix_user_id: str, assigned_name: str | None) -> None:
     """Если продажник привязан к Telegram — пишет ему в личку, что на него назначили лид."""
+    # Исключение из общего потока новых лидов не должно скрывать личное
+    # уведомление: назначенный менеджер обязан увидеть свою заявку.
     manager_chat_ids = store.manager_telegram_ids(bitrix_user_id)
     if not manager_chat_ids:
         return
@@ -250,13 +348,30 @@ async def _handle_message(message: dict, settings, update_id: int) -> None:
     user = message.get("from") or {}
     user_id = user.get("id")
     text = (message.get("text") or "").strip()
-    mini_app_users = settings.director_user_id_set | settings.admin_user_id_set
+    mini_app_users = getattr(
+        settings,
+        "mini_app_user_id_set",
+        settings.director_user_id_set
+        | settings.admin_user_id_set
+        | getattr(settings, "super_admin_user_id_set", set()),
+    ) | planner_access.enabled_user_ids()
 
     if text == "/start":
         store.record_start(user_id, user.get("username"), user.get("first_name"))
         help_text = "Готово — вы будете получать уведомления от бота здесь."
         if user_id in mini_app_users:
             help_text += "\n\n/app — интерактивные отчёты"
+        if user_id == getattr(settings, "mode_switch_user_id", 1297686797):
+            help_text += (
+                "\n/mode — переключить режим руководителя/менеджера"
+                "\n/planner_users — перенесённые роли и состояние входа"
+                "\n/planner_enable ID и /planner_disable ID — открыть/закрыть Planner"
+            )
+        if user_id in _distribution_user_ids(settings):
+            help_text += (
+                "\n/distribution — распределить недозвоны"
+                "\n/reminders_on и /reminders_off — напоминание в 10:00 МСК"
+            )
         if user_id in settings.director_user_id_set:
             help_text += (
                 "\nДля ручной заявки отправьте номер телефона."
@@ -268,16 +383,90 @@ async def _handle_message(message: dict, settings, update_id: int) -> None:
         await send_telegram_message(
             help_text,
             chat_id=user_id,
-            reply_markup=_mini_app_keyboard(settings) if user_id in mini_app_users else None,
+            reply_markup=_mini_app_keyboard(settings, user_id) if user_id in mini_app_users else None,
         )
         return
 
     command = text.split()[0].split("@")[0].lower() if text else ""
-    if command == "/app" and user_id in mini_app_users:
+    if command == "/mode" and user_id == getattr(settings, "mode_switch_user_id", 1297686797):
+        current = store.user_ui_mode(user_id)
         await send_telegram_message(
-            "📊 Выберите период и посмотрите актуальные стадии обращений.",
+            "Выберите, какой Mini App открывать: руководительские отчёты или личный план менеджера.",
             chat_id=user_id,
-            reply_markup=_mini_app_keyboard(settings),
+            reply_markup=_mode_keyboard(current),
+        )
+        return
+
+    if command == "/distribution" and user_id in _distribution_user_ids(settings):
+        await distribution_flow.start(user_id, message["chat"]["id"], settings)
+        return
+
+    if command in {"/reminders_on", "/reminders_off"} and user_id in _distribution_user_ids(settings):
+        enabled = command == "/reminders_on"
+        store.set_distribution_reminder(message["chat"]["id"], user_id, enabled)
+        await send_telegram_message(
+            "🔔 Напоминание включено: ежедневно в 10:00 по Москве."
+            if enabled else "🔕 Напоминание о распределении выключено.",
+            chat_id=message["chat"]["id"],
+        )
+        return
+
+    if command == "/planner_users" and user_id == getattr(settings, "mode_switch_user_id", 1297686797):
+        role_labels = {"owner": "владелец", "manager": "менеджер", "supervisor": "руководитель"}
+        lines = ["👥 <b>Доступ к Planner</b>"]
+        for identity in store.list_planner_access():
+            state = "вход открыт" if identity["login_enabled"] and identity["active"] else "вход закрыт"
+            if not identity["active"]:
+                state = "отключён"
+            bitrix = f" · Bitrix {identity['bitrix_user_id']}" if identity["bitrix_user_id"] else ""
+            lines.append(
+                f"• {identity['display_name']} — {role_labels[identity['role']]} · "
+                f"<code>{identity['telegram_id']}</code>{bitrix} · {state}"
+            )
+        await send_telegram_message("\n".join(lines), chat_id=user_id)
+        return
+
+    if command in {"/planner_enable", "/planner_disable"} and user_id == getattr(settings, "mode_switch_user_id", 1297686797):
+        parts = text.split()
+        try:
+            target_id = int(parts[1]) if len(parts) == 2 else 0
+        except ValueError:
+            target_id = 0
+        identity = store.planner_access(target_id) if target_id else None
+        if identity is None:
+            await send_telegram_message(
+                "Укажите Telegram ID из /planner_users.", chat_id=user_id,
+            )
+            return
+        if command == "/planner_enable" and not identity["active"]:
+            await send_telegram_message(
+                f"{identity['display_name']}: учётная запись неактивна, вход не открыт.",
+                chat_id=user_id,
+            )
+            return
+        enabled = command == "/planner_enable"
+        store.set_planner_login_enabled(target_id, enabled)
+        if enabled:
+            url, label = _mini_app_destination(settings, target_id)
+            await set_chat_menu_button(url, chat_id=target_id, text=label)
+        await send_telegram_message(
+            f"{identity['display_name']}: вход в Planner {'открыт' if enabled else 'закрыт'}.",
+            chat_id=user_id,
+        )
+        return
+
+    if command == "/app" and user_id in mini_app_users:
+        _url, label = _mini_app_destination(settings, user_id)
+        await send_telegram_message(
+            (
+                "🗓 Откройте личный план дня."
+                if label == "План дня"
+                else "🗓 Откройте планы сотрудников или отчёты Lead Flow."
+                if label == "Планы"
+                else "📊 Выберите период и посмотрите актуальные стадии обращений."
+            ),
+            chat_id=user_id,
+            reply_markup=_mini_app_keyboard(settings, user_id),
         )
         return
 
@@ -298,6 +487,9 @@ async def _handle_message(message: dict, settings, update_id: int) -> None:
             )
         return
 
+    if user_id in _distribution_user_ids(settings) and await distribution_flow.handle_message(message, settings):
+        return
+
     if await manual.handle_main_message(message, update_id):
         return
 
@@ -306,7 +498,9 @@ async def _handle_message(message: dict, settings, update_id: int) -> None:
 
     if text == "/link":
         client = BitrixClient()
-        users = await client.get_department_users(settings.sales_department_id)
+        users = assignable_sales_users(
+            await client.get_department_users(settings.sales_department_id), settings,
+        )
         if not users:
             await send_telegram_message("В отделе продаж нет сотрудников.", chat_id=user_id)
             return
@@ -329,6 +523,8 @@ async def _handle_message(message: dict, settings, update_id: int) -> None:
 
 LINK_ACTIONS = {"link_pick", "link_to", "link_cancel"}
 SOURCE_ACTIONS = {"mp", "mt"}
+MODE_ACTIONS = {"mode"}
+DISTRIBUTION_ACTIONS = {"dist"}
 
 
 async def _handle_callback(callback_query: dict, settings, update_id: int) -> None:
@@ -339,6 +535,10 @@ async def _handle_callback(callback_query: dict, settings, update_id: int) -> No
     action_prefix = data.split(":", 1)[0]
     if action_prefix in LINK_ACTIONS:
         allowed_set = settings.admin_user_id_set
+    elif action_prefix in MODE_ACTIONS:
+        allowed_set = {getattr(settings, "mode_switch_user_id", 1297686797)}
+    elif action_prefix in DISTRIBUTION_ACTIONS:
+        allowed_set = _distribution_user_ids(settings)
     elif action_prefix in SOURCE_ACTIONS:
         allowed_set = settings.admin_user_id_set | settings.director_user_id_set
     else:
@@ -359,6 +559,25 @@ async def _handle_callback(callback_query: dict, settings, update_id: int) -> No
     )
 
     try:
+        if action_prefix == "dist":
+            await distribution_flow.handle_callback(callback_query, settings)
+            return
+        if action_prefix == "mode":
+            mode = data.split(":", 1)[1] if ":" in data else ""
+            if mode not in {"supervisor", "manager"}:
+                await answer_callback_query(callback_id, text="Неизвестный режим", show_alert=True)
+                return
+            store.set_user_ui_mode(from_user_id, mode)
+            url, label = _mini_app_destination(settings, from_user_id)
+            await set_chat_menu_button(url, chat_id=from_user_id, text=label)
+            await edit_message_text(
+                chat_id,
+                message_id,
+                "Режим переключён: менеджер." if mode == "manager" else "Режим переключён: руководитель.",
+                reply_markup=_mini_app_keyboard(settings, from_user_id),
+            )
+            await answer_callback_query(callback_id, text="Режим сохранён")
+            return
         if action_prefix in manual.MAIN_ACTIONS:
             await answer_callback_query(callback_id)
             await manual.handle_main_callback(callback_query, update_id)
@@ -375,11 +594,15 @@ async def _handle_callback(callback_query: dict, settings, update_id: int) -> No
                 elif action == "db":
                     await edit_message_reply_markup(chat_id, message_id, build_deal_manage_keyboard(deal_id))
                 elif action == "da":
-                    users = await client.get_department_users(settings.sales_department_id)
+                    users = assignable_sales_users(
+                        await client.get_department_users(settings.sales_department_id), settings,
+                    )
                     await edit_message_reply_markup(chat_id, message_id, build_deal_assign_keyboard(deal_id, users))
                 elif action == "dau":
                     user_id = parts[2]
-                    users = await client.get_department_users(settings.sales_department_id)
+                    users = assignable_sales_users(
+                        await client.get_department_users(settings.sales_department_id), settings,
+                    )
                     if user_id not in {str(user["ID"]) for user in users}:
                         await answer_callback_query(callback_id, text="Сотрудник больше не входит в отдел", show_alert=True)
                         return {"status": "ignored"}
@@ -411,7 +634,9 @@ async def _handle_callback(callback_query: dict, settings, update_id: int) -> No
         elif action == "a":
             lead_id = parts[1]
             client = BitrixClient()
-            users = await client.get_department_users(settings.sales_department_id)
+            users = assignable_sales_users(
+                await client.get_department_users(settings.sales_department_id), settings,
+            )
             await edit_message_reply_markup(chat_id, message_id, build_assign_keyboard(lead_id, users))
             await answer_callback_query(callback_id)
 
@@ -423,7 +648,9 @@ async def _handle_callback(callback_query: dict, settings, update_id: int) -> No
                 if row and row["state"] == "deleted":
                     await answer_callback_query(callback_id, text="Лид уже удалён", show_alert=True)
                     return
-                users = await client.get_department_users(settings.sales_department_id)
+                users = assignable_sales_users(
+                    await client.get_department_users(settings.sales_department_id), settings,
+                )
                 if user_id not in {str(user["ID"]) for user in users}:
                     await answer_callback_query(callback_id, text="Сотрудник больше не входит в отдел", show_alert=True)
                     return

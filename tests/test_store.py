@@ -76,6 +76,51 @@ class StoreLinkingTests(unittest.TestCase):
         names = [link['bitrix_name'] for link in store.list_links()]
         self.assertEqual(names, ['Анна', 'Борис'])
 
+    def test_ui_mode_defaults_to_supervisor_and_persists_manager(self):
+        self.assertEqual(store.user_ui_mode(1297686797), 'supervisor')
+        store.set_user_ui_mode(1297686797, 'manager')
+        self.assertEqual(store.user_ui_mode(1297686797), 'manager')
+
+    def test_ui_mode_rejects_unknown_value(self):
+        with self.assertRaises(ValueError):
+            store.set_user_ui_mode(1297686797, 'admin')
+
+    def test_distribution_session_round_trip_and_clear(self):
+        store.save_distribution_session(1297686797, 'abc123', 'managers', {'selected': [1]})
+        session = store.distribution_session(1297686797)
+        self.assertEqual(session['session_id'], 'abc123')
+        self.assertEqual(session['step'], 'managers')
+        self.assertEqual(session['payload'], {'selected': [1]})
+        store.clear_distribution_session(1297686797)
+        self.assertIsNone(store.distribution_session(1297686797))
+
+    def test_distribution_reminder_claim_is_idempotent_per_day(self):
+        store.set_distribution_reminder(1297686797, 1297686797, True)
+        self.assertEqual(len(store.distribution_reminders()), 1)
+        self.assertTrue(store.claim_distribution_reminder(1297686797, 0, '2026-10-21'))
+        self.assertFalse(store.claim_distribution_reminder(1297686797, 0, '2026-10-21'))
+        self.assertTrue(store.claim_distribution_reminder(1297686797, 0, '2026-10-22'))
+        store.set_distribution_reminder(1297686797, 1297686797, False)
+        self.assertEqual(store.distribution_reminders(), [])
+
+    def test_planner_access_upsert_preserves_explicit_login_switch(self):
+        values = {
+            'telegram_id': 42, 'bitrix_user_id': '110', 'display_name': 'Яна',
+            'role': 'manager', 'active': True, 'source': 'legacy',
+        }
+        store.upsert_planner_access(**values, login_enabled_on_insert=False)
+        self.assertFalse(store.planner_access(42)['login_enabled'])
+        self.assertTrue(store.set_planner_login_enabled(42, True))
+        store.upsert_planner_access(**values, login_enabled_on_insert=False)
+        self.assertTrue(store.planner_access(42)['login_enabled'])
+
+    def test_planner_access_rejects_unknown_role(self):
+        with self.assertRaises(ValueError):
+            store.upsert_planner_access(
+                42, bitrix_user_id=None, display_name='X', role='admin',
+                active=True, source='test',
+            )
+
     def test_seen_lead_can_be_found_by_normalized_phone(self):
         store.record_seen_lead({'ID':'20462','PHONE':[{'VALUE':'+7 (952) 123-45-67'}]})
         self.assertTrue(store.was_lead_seen('20462'))

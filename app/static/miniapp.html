@@ -28,6 +28,19 @@
     .subtitle { margin: 0 0 20px; color: var(--hint); }
     .panel, .source, .kpi { background: var(--card); border-radius: 16px; }
     .panel { padding: 16px; box-shadow: 0 2px 14px rgba(0,0,0,.04); }
+    .presence-panel { margin-bottom: 16px; }
+    .presence-head { display: flex; align-items: baseline; justify-content: space-between; gap: 10px; margin-bottom: 11px; }
+    .presence-head strong { font-size: 14px; }
+    .presence-updated { color: var(--hint); font-size: 10px; text-align: right; }
+    .presence-list { display: flex; gap: 8px; overflow-x: auto; margin: 0 -2px; padding: 2px; scrollbar-width: none; }
+    .presence-list::-webkit-scrollbar { display: none; }
+    .presence-item { flex: 0 0 auto; display: grid; grid-template-columns: auto auto; align-items: center; column-gap: 8px; min-width: 128px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); }
+    .presence-dot { width: 10px; height: 10px; border-radius: 50%; background: #d92d20; box-shadow: 0 0 0 3px color-mix(in srgb, #d92d20 18%, transparent); }
+    .presence-name { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 700; }
+    .presence-label { grid-column: 2; margin-top: 2px; color: var(--hint); font-size: 10px; }
+    .presence-item.working .presence-dot { background: #12b76a; box-shadow: 0 0 0 3px color-mix(in srgb, #12b76a 18%, transparent); }
+    .presence-item.break .presence-dot { background: #f79009; box-shadow: 0 0 0 3px color-mix(in srgb, #f79009 20%, transparent); }
+    .presence-empty { color: var(--hint); font-size: 12px; }
     .quick { display: flex; gap: 7px; overflow-x: auto; margin: 0 -2px 15px; padding: 2px; scrollbar-width: none; }
     .quick::-webkit-scrollbar { display: none; }
     .chip, .tab, .manager-toggle, .all-managers {
@@ -78,6 +91,48 @@
     .manager-toggle { padding: 7px 10px; font-size: 13px; }
     .manager-hint { margin-top: 9px; color: var(--hint); font-size: 11px; }
     .tabs { display: grid; grid-template-columns: 1fr 1fr; gap: 5px; padding: 4px; background: var(--card); border-radius: 14px; }
+    .app-nav { display: flex; gap: 8px; margin: 0 0 16px; overflow-x: auto; scrollbar-width: none; }
+    .app-nav::-webkit-scrollbar { display: none; }
+    .app-nav button { flex: 1 0 auto; padding: 11px; border: 1px solid var(--line); color: var(--text); }
+    .app-nav button.active { background: var(--button); color: var(--button-text); border-color: var(--button); }
+    .report-sections { display: grid; grid-template-columns: repeat(4, 1fr); gap: 5px; margin-bottom: 14px; padding: 4px; background: var(--card); border-radius: 14px; }
+    .report-sections button { min-width: 0; padding: 9px 6px; border: 0; border-radius: 10px; background: transparent; color: var(--text); font: inherit; font-size: 13px; font-weight: 650; cursor: pointer; }
+    .report-sections button.active { background: var(--button); color: var(--button-text); }
+    .call-card { border: 1px solid var(--line); border-radius: 14px; padding: 14px; background: var(--card); }
+    .call-card.rejected { background: color-mix(in srgb, #d9534f 9%, var(--card)); border-color: color-mix(in srgb, #d9534f 28%, var(--line)); }
+    .call-head { display: flex; justify-content: space-between; gap: 10px; align-items: baseline; }
+    .call-head a { color: var(--button); font-weight: 750; text-decoration: none; }
+    .call-manager { color: var(--hint); font-size: 12px; }
+    .call-metrics { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 12px; }
+    .call-metric { padding: 10px; border-radius: 10px; background: var(--bg); }
+    .call-metric span { display: block; color: var(--hint); font-size: 11px; margin-bottom: 4px; }
+    .call-result { margin-top: 10px; padding-top: 10px; border-top: 1px solid var(--line); }
+    .client-tools { display: grid; grid-template-columns: 1fr auto; gap: 9px; margin-top: 13px; }
+    .client-search { min-width: 0; padding: 11px 12px; border: 1px solid var(--line); border-radius: 11px; background: var(--bg); color: var(--text); font: inherit; }
+    .client-download { padding: 11px 13px; border: 0; border-radius: 11px; background: var(--button); color: var(--button-text); font: inherit; font-weight: 700; cursor: pointer; }
+    .client-download:disabled { opacity: .6; }
+    .client-card { display: grid; gap: 7px; padding: 13px 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); }
+    .client-head { display: flex; justify-content: space-between; gap: 10px; }
+    .client-name { min-width: 0; color: var(--button); font-weight: 750; text-decoration: none; overflow-wrap: anywhere; }
+    .client-badge { flex: 0 0 auto; align-self: start; padding: 3px 7px; border-radius: 999px; background: color-mix(in srgb, #12b76a 12%, var(--card)); color: #078548; font-size: 10px; font-weight: 700; }
+    .client-badge.completed { background: var(--accent-soft); color: var(--button); }
+    .client-phone { color: var(--text); text-decoration: none; }
+    .client-meta { display: flex; justify-content: space-between; gap: 10px; color: var(--hint); font-size: 12px; }
+    .worktime-controls { display: grid; grid-template-columns: 1fr 1fr auto; gap: 8px; margin-top: 13px; }
+    .worktime-controls input { min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); font: inherit; }
+    .worktime-card { padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); }
+    .worktime-head { display: flex; justify-content: space-between; gap: 10px; font-weight: 750; }
+    .worktime-date { color: var(--hint); font-size: 12px; font-weight: 500; }
+    .worktime-metrics { display: grid; grid-template-columns: repeat(3, 1fr); gap: 7px; margin-top: 11px; }
+    .worktime-metric { padding: 9px; border-radius: 10px; background: var(--bg); }
+    .worktime-metric span { display: block; color: var(--hint); font-size: 10px; }
+    .worktime-metric strong { display: block; margin-top: 3px; font-size: 13px; }
+    .worktime-breaks { margin-top: 9px; color: var(--hint); font-size: 12px; }
+    .task-card { padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); }
+    .task-title { color: var(--text); font-weight: 750; text-decoration: none; overflow-wrap: anywhere; }
+    .task-origin { flex: 0 0 auto; padding: 3px 7px; border-radius: 999px; background: var(--accent-soft); color: var(--button); font-size: 10px; font-weight: 700; }
+    .task-origin.automatic { background: color-mix(in srgb, #f79009 13%, var(--card)); color: #b54708; }
+    .task-line { display: flex; justify-content: space-between; gap: 10px; margin-top: 8px; color: var(--hint); font-size: 12px; }
     .tab { background: transparent; border-radius: 10px; padding: 10px; font-weight: 650; }
     .tab.active { background: var(--button); color: var(--button-text); }
     .list { margin-top: 11px; display: grid; gap: 8px; }
@@ -128,7 +183,29 @@
     <h1>Отчёт по обращениям</h1>
     <p class="subtitle">Текущее состояние лидов и сделок из выбранного периода</p>
 
-    <section class="panel">
+    <section class="panel presence-panel" aria-label="Статус менеджеров">
+      <div class="presence-head">
+        <strong>Менеджеры</strong>
+        <span id="presence-updated" class="presence-updated">обновляется каждую минуту</span>
+      </div>
+      <div id="presence-list" class="presence-list" aria-live="polite">
+        <span class="presence-empty">Загружаю статусы…</span>
+      </div>
+    </section>
+
+    <nav class="app-nav">
+      <button id="reports-nav">Отчёты</button>
+      <button id="calls-nav" class="hidden">Звонки сегодня</button>
+    </nav>
+
+    <nav id="report-sections" class="report-sections hidden" aria-label="Вид отчёта">
+      <button id="period-nav" class="active">Обращения</button>
+      <button id="tasks-nav">Задачи</button>
+      <button id="clients-nav">Клиенты</button>
+      <button id="worktime-nav">Табель</button>
+    </nav>
+
+    <section id="report-controls" class="panel hidden">
       <div class="quick" aria-label="Быстрый выбор периода">
         <button class="chip" data-period="today">Сегодня</button>
         <button class="chip" data-period="7days">7 дней</button>
@@ -151,6 +228,7 @@
       </div>
       <div id="period-preview" class="period-preview"></div>
       <button id="build" class="build">Показать отчёт</button>
+      <button id="sales-download" class="client-download" style="display:block;margin:9px auto 0">Скачать лиды и сделки</button>
       <div id="status" role="status"></div>
     </section>
 
@@ -174,6 +252,66 @@
       </nav>
       <div id="source-list" class="list"></div>
     </section>
+    <section id="calls-view" class="hidden">
+      <div class="panel">
+        <strong>Обработка сегодняшних лидов</strong>
+        <div id="calls-date" class="meta"></div>
+        <div class="worktime-controls">
+          <input id="telephony-start" type="date" aria-label="Начало периода телефонии">
+          <input id="telephony-end" type="date" aria-label="Конец периода телефонии">
+          <button id="telephony-download" class="client-download">Excel АТС</button>
+        </div>
+        <div id="calls-status" role="status"></div>
+      </div>
+      <div id="calls-list" class="list"></div>
+    </section>
+    <section id="clients-view" class="hidden">
+      <div class="panel">
+        <strong>Клиенты на сопровождении</strong>
+        <div id="clients-meta" class="meta">Актуальные данные второй воронки Bitrix</div>
+        <div class="client-tools">
+          <input id="clients-search" class="client-search" type="search" placeholder="ФИО, телефон или стадия" aria-label="Поиск клиентов">
+          <button id="clients-download" class="client-download">Excel</button>
+        </div>
+        <div id="clients-status" role="status"></div>
+      </div>
+      <div id="clients-list" class="list"></div>
+    </section>
+    <section id="tasks-view" class="hidden">
+      <div class="panel">
+        <strong>Дела и задачи менеджеров</strong>
+        <div id="tasks-meta" class="meta">Ручные задачи отделены от автоматических</div>
+        <div class="worktime-controls">
+          <input id="tasks-start" type="date" aria-label="Начало периода задач">
+          <input id="tasks-end" type="date" aria-label="Конец периода задач">
+          <button id="tasks-load" class="client-download">Показать</button>
+        </div>
+        <div class="client-tools">
+          <select id="tasks-filter" class="client-search" aria-label="Источник постановки задачи">
+            <option value="all">Все задачи</option>
+            <option value="manual">Только ручные</option>
+            <option value="automatic">Только автоматические</option>
+          </select>
+          <button id="tasks-download" class="client-download hidden">Excel</button>
+        </div>
+        <div id="tasks-status" role="status"></div>
+      </div>
+      <div id="tasks-list" class="list"></div>
+    </section>
+    <section id="worktime-view" class="hidden">
+      <div class="panel">
+        <strong>Рабочее время менеджеров</strong>
+        <div class="meta">Начало и конец дня, все перерывы по данным Bitrix</div>
+        <div class="worktime-controls">
+          <input id="worktime-start" type="date" aria-label="Начало периода табеля">
+          <input id="worktime-end" type="date" aria-label="Конец периода табеля">
+          <button id="worktime-load" class="client-download">Показать</button>
+        </div>
+        <button id="worktime-download" class="client-download hidden" style="margin-top:9px">Скачать Excel</button>
+        <div id="worktime-status" role="status"></div>
+      </div>
+      <div id="worktime-list" class="list"></div>
+    </section>
   </main>
 
   <script>
@@ -185,6 +323,7 @@
       const startDisplay = document.getElementById('start-display');
       const endDisplay = document.getElementById('end-display');
       const buildButton = document.getElementById('build');
+      const salesDownload = document.getElementById('sales-download');
       const periodPreview = document.getElementById('period-preview');
       const status = document.getElementById('status');
       const report = document.getElementById('report');
@@ -192,7 +331,46 @@
       const managerFilter = document.getElementById('manager-filter');
       const managerOptions = document.getElementById('manager-options');
       const allManagers = document.getElementById('all-managers');
+      const reportsNav = document.getElementById('reports-nav');
+      const callsNav = document.getElementById('calls-nav');
+      const reportSections = document.getElementById('report-sections');
+      const periodNav = document.getElementById('period-nav');
+      const tasksNav = document.getElementById('tasks-nav');
+      const clientsNav = document.getElementById('clients-nav');
+      const worktimeNav = document.getElementById('worktime-nav');
+      const reportControls = document.getElementById('report-controls');
+      const callsView = document.getElementById('calls-view');
+      const callsList = document.getElementById('calls-list');
+      const callsStatus = document.getElementById('calls-status');
+      const telephonyStart = document.getElementById('telephony-start');
+      const telephonyEnd = document.getElementById('telephony-end');
+      const telephonyDownload = document.getElementById('telephony-download');
+      const clientsView = document.getElementById('clients-view');
+      const clientsList = document.getElementById('clients-list');
+      const clientsStatus = document.getElementById('clients-status');
+      const clientsSearch = document.getElementById('clients-search');
+      const clientsDownload = document.getElementById('clients-download');
+      const tasksView = document.getElementById('tasks-view');
+      const tasksList = document.getElementById('tasks-list');
+      const tasksStatus = document.getElementById('tasks-status');
+      const tasksStart = document.getElementById('tasks-start');
+      const tasksEnd = document.getElementById('tasks-end');
+      const tasksLoad = document.getElementById('tasks-load');
+      const tasksFilter = document.getElementById('tasks-filter');
+      const tasksDownload = document.getElementById('tasks-download');
+      const worktimeView = document.getElementById('worktime-view');
+      const worktimeList = document.getElementById('worktime-list');
+      const worktimeStatus = document.getElementById('worktime-status');
+      const worktimeStart = document.getElementById('worktime-start');
+      const worktimeEnd = document.getElementById('worktime-end');
+      const worktimeLoad = document.getElementById('worktime-load');
+      const worktimeDownload = document.getElementById('worktime-download');
+      const presenceList = document.getElementById('presence-list');
+      const presenceUpdated = document.getElementById('presence-updated');
       let data = null;
+      let clientsData = null;
+      let tasksData = null;
+      let activeReportSection = 'period';
       let activeTab = 'leads';
       const selectedManagers = new Set();
 
@@ -216,6 +394,10 @@
       };
       const now = new Date();
       setDates(new Date(now.getFullYear(), now.getMonth(), 1), now);
+      tasksStart.value = iso(new Date(now.getFullYear(), now.getMonth(), 1)); tasksEnd.value = iso(now);
+      telephonyStart.value = iso(new Date(now.getFullYear(), now.getMonth(), 1)); telephonyEnd.value = iso(now);
+      const worktimeFrom = new Date(now); worktimeFrom.setDate(worktimeFrom.getDate() - 6);
+      worktimeStart.value = iso(worktimeFrom); worktimeEnd.value = iso(now);
       startInput.addEventListener('change', updatePeriodPreview);
       endInput.addEventListener('change', updatePeriodPreview);
 
@@ -372,6 +554,329 @@
       const requestHeaders = () => ({'X-Telegram-Init-Data': tg ? tg.initData : ''});
       const wait = milliseconds => new Promise(resolve => setTimeout(resolve, milliseconds));
 
+      const presenceLabels = {
+        working: 'Работает', break: 'На обеде', offline: 'Не работает', unknown: 'Нет данных'
+      };
+
+      function renderPresence(payload) {
+        presenceList.replaceChildren();
+        const managers = payload.managers || [];
+        if (!managers.length) {
+          const empty = document.createElement('span'); empty.className = 'presence-empty';
+          empty.textContent = payload.unavailable ? 'Статусы временно недоступны' : 'Менеджеры не найдены';
+          presenceList.append(empty); return;
+        }
+        managers.forEach(manager => {
+          const item = document.createElement('div'); item.className = `presence-item ${manager.status}`;
+          const dot = document.createElement('i'); dot.className = 'presence-dot';
+          const name = document.createElement('span'); name.className = 'presence-name'; name.textContent = manager.name;
+          const label = document.createElement('small'); label.className = 'presence-label';
+          label.textContent = presenceLabels[manager.status] || presenceLabels.unknown;
+          item.append(dot, name, label); presenceList.append(item);
+        });
+        presenceUpdated.textContent = payload.checked_at
+          ? `проверено ${new Date(payload.checked_at).toLocaleTimeString('ru-RU', {hour: '2-digit', minute: '2-digit'})}`
+          : 'обновляется каждую минуту';
+      }
+
+      async function loadPresence() {
+        try {
+          const response = await fetch('/api/miniapp/managers/presence', {headers: requestHeaders()});
+          if (!response.ok) throw new Error('presence unavailable');
+          renderPresence(await response.json());
+        } catch (_) {
+          renderPresence({managers: [], unavailable: true});
+        }
+      }
+
+      const durationText = seconds => {
+        if (seconds === null || seconds === undefined) return '—';
+        const minutes = Math.floor(seconds / 60), rest = seconds % 60;
+        return minutes ? `${minutes} мин ${String(rest).padStart(2, '0')} сек` : `${rest} сек`;
+      };
+
+      const dateTimeText = value => value ? new Date(value).toLocaleString('ru-RU', {dateStyle: 'short', timeStyle: 'short'}) : 'без срока';
+
+      function outcomeText(item) {
+        if (!item.call_count) return 'Ещё не звонили';
+        if (item.call_status !== 'Success') return 'Не дозвонились';
+        if (item.task_title) return `Задача: ${item.task_title} · срок ${dateTimeText(item.task_deadline)}`;
+        return 'Задача после звонка не поставлена';
+      }
+
+      async function openCalls() {
+        reportsNav.classList.remove('active'); callsNav.classList.add('active'); reportSections.classList.add('hidden');
+        reportControls.classList.add('hidden'); report.classList.add('hidden'); tasksView.classList.add('hidden'); clientsView.classList.add('hidden'); worktimeView.classList.add('hidden'); callsView.classList.remove('hidden');
+        callsStatus.className = ''; callsStatus.textContent = 'Загружаю…'; callsList.replaceChildren();
+        try {
+          const response = await fetch('/api/miniapp/calls/today', {headers: requestHeaders()});
+          if (!response.ok) throw new Error('Не удалось загрузить звонки');
+          const payload = await response.json();
+          document.getElementById('calls-date').textContent = shortDate(payload.date);
+          const items = payload.items || payload.leads || [];
+          callsStatus.textContent = `Обращений сегодня: ${items.length}`;
+          items.forEach(item => {
+            const card = document.createElement('article'); card.className = 'call-card';
+            if (item.is_rejected) card.classList.add('rejected');
+            const head = document.createElement('div'); head.className = 'call-head';
+            const label = item.entity_type === 'deal' ? 'Сделка' : 'Лид';
+            const link = document.createElement('a'); link.href = item.entity_url || item.lead_url; link.target = '_blank'; link.rel = 'noopener noreferrer'; link.textContent = `${label} №${item.entity_id || item.lead_id}`;
+            const manager = document.createElement('span'); manager.className = 'call-manager'; manager.textContent = item.manager_name;
+            head.append(link, manager);
+            const path = item.stage_path && item.stage_path.length ? item.stage_path : [item.stage_name || 'Без стадии'];
+            const stage = document.createElement('div'); stage.className = 'call-result'; stage.textContent = `${path.length > 1 ? 'Стадии сегодня' : 'Стадия'}: ${path.join(' → ')}`;
+            const metrics = document.createElement('div'); metrics.className = 'call-metrics';
+            [['Время реакции', durationText(item.reaction_seconds)], ['Длительность', durationText(item.duration_seconds)]].forEach(([label, value]) => {
+              const metric = document.createElement('div'); metric.className = 'call-metric';
+              const caption = document.createElement('span'); caption.textContent = label;
+              const strong = document.createElement('strong'); strong.textContent = value;
+              metric.append(caption, strong); metrics.append(metric);
+            });
+            const result = document.createElement(item.task_url ? 'a' : 'div'); result.className = 'call-result'; result.textContent = outcomeText(item);
+            if (item.task_url) { result.href = item.task_url; result.target = '_blank'; result.rel = 'noopener noreferrer'; }
+            card.append(head, stage, metrics, result); callsList.append(card);
+          });
+          if (!items.length) callsList.textContent = 'Сегодня новых лидов и сделок нет';
+        } catch (error) { callsStatus.className = 'error'; callsStatus.textContent = error.message; }
+      }
+
+      function showReportSection(section) {
+        activeReportSection = section;
+        reportsNav.classList.add('active'); callsNav.classList.remove('active'); reportSections.classList.remove('hidden');
+        periodNav.classList.toggle('active', section === 'period');
+        tasksNav.classList.toggle('active', section === 'tasks');
+        clientsNav.classList.toggle('active', section === 'clients');
+        worktimeNav.classList.toggle('active', section === 'worktime');
+        callsView.classList.add('hidden'); reportControls.classList.add('hidden'); report.classList.add('hidden');
+        tasksView.classList.add('hidden'); clientsView.classList.add('hidden'); worktimeView.classList.add('hidden');
+        if (section === 'period') {
+          reportControls.classList.remove('hidden');
+          if (data) report.classList.remove('hidden');
+        } else if (section === 'tasks') tasksView.classList.remove('hidden');
+        else if (section === 'clients') clientsView.classList.remove('hidden');
+        else worktimeView.classList.remove('hidden');
+      }
+
+      callsNav.addEventListener('click', openCalls);
+      telephonyDownload.addEventListener('click', async () => {
+        if (!telephonyStart.value || !telephonyEnd.value || telephonyStart.value > telephonyEnd.value) {
+          callsStatus.className = 'error'; callsStatus.textContent = 'Проверьте выбранные даты'; return;
+        }
+        telephonyDownload.disabled = true; callsStatus.className = ''; callsStatus.textContent = 'Формирую выгрузку телефонии…';
+        try {
+          const params = new URLSearchParams({start: telephonyStart.value, end: telephonyEnd.value});
+          const response = await fetch(`/api/miniapp/telephony.xlsx?${params}`, {headers: requestHeaders()});
+          if (!response.ok) throw new Error('Не удалось сформировать выгрузку телефонии');
+          const url = URL.createObjectURL(await response.blob());
+          const link = document.createElement('a'); link.href = url; link.download = `telephony-${telephonyStart.value}-${telephonyEnd.value}.xlsx`; link.click();
+          URL.revokeObjectURL(url); callsStatus.textContent = 'Выгрузка телефонии готова';
+        } catch (error) { callsStatus.className = 'error'; callsStatus.textContent = error.message; }
+        finally { telephonyDownload.disabled = false; }
+      });
+      reportsNav.addEventListener('click', () => {
+        if (activeReportSection === 'tasks') openTasks();
+        else if (activeReportSection === 'clients') openClients();
+        else if (activeReportSection === 'worktime') openWorktime();
+        else showReportSection('period');
+      });
+      periodNav.addEventListener('click', () => showReportSection('period'));
+
+      const clientDateText = value => value
+        ? new Date(value).toLocaleString('ru-RU', {dateStyle: 'short', timeStyle: 'short'}) : 'дата не указана';
+
+      function renderClients() {
+        clientsList.replaceChildren();
+        const query = clientsSearch.value.trim().toLocaleLowerCase('ru-RU');
+        const items = (clientsData.items || []).filter(item =>
+          !query || `${item.name} ${item.phone} ${item.stage}`.toLocaleLowerCase('ru-RU').includes(query)
+        );
+        clientsStatus.textContent = `Найдено: ${items.length} из ${clientsData.totals.all}`;
+        items.forEach(item => {
+          const card = document.createElement('article'); card.className = 'client-card';
+          const head = document.createElement('div'); head.className = 'client-head';
+          const name = document.createElement('a'); name.className = 'client-name'; name.href = item.deal_url;
+          name.target = '_blank'; name.rel = 'noopener noreferrer'; name.textContent = item.name;
+          const badge = document.createElement('span'); badge.className = `client-badge ${item.status}`;
+          badge.textContent = item.status === 'completed' ? 'Завершён' : 'Активен';
+          head.append(name, badge);
+          const phone = document.createElement(item.phone ? 'a' : 'span'); phone.className = 'client-phone';
+          phone.textContent = item.phone || 'Телефон не указан';
+          if (item.phone) phone.href = `tel:${item.phone.replace(/[^+\d]/g, '')}`;
+          const meta = document.createElement('div'); meta.className = 'client-meta';
+          const stage = document.createElement('span'); stage.textContent = item.stage;
+          const contractDate = document.createElement('span'); contractDate.textContent = clientDateText(item.contract_date);
+          meta.append(stage, contractDate); card.append(head, phone, meta); clientsList.append(card);
+        });
+        if (!items.length) {
+          const empty = document.createElement('div'); empty.className = 'empty';
+          empty.textContent = query ? 'По вашему запросу ничего не найдено' : 'Клиентов на сопровождении нет';
+          clientsList.append(empty);
+        }
+      }
+
+      async function openClients() {
+        showReportSection('clients');
+        if (clientsData) { renderClients(); return; }
+        clientsStatus.className = ''; clientsStatus.textContent = 'Загружаю клиентов…'; clientsList.replaceChildren();
+        try {
+          const response = await fetch('/api/miniapp/clients', {headers: requestHeaders()});
+          if (!response.ok) throw new Error('Не удалось загрузить клиентов');
+          clientsData = await response.json();
+          document.getElementById('clients-meta').textContent =
+            `Активных: ${clientsData.totals.active} · завершённых: ${clientsData.totals.completed}`;
+          renderClients();
+        } catch (error) { clientsStatus.className = 'error'; clientsStatus.textContent = error.message; }
+      }
+
+      clientsNav.addEventListener('click', openClients);
+      clientsSearch.addEventListener('input', () => { if (clientsData) renderClients(); });
+      clientsDownload.addEventListener('click', async () => {
+        clientsDownload.disabled = true;
+        try {
+          const response = await fetch('/api/miniapp/clients.xlsx', {headers: requestHeaders()});
+          if (!response.ok) throw new Error('Не удалось сформировать Excel');
+          const url = URL.createObjectURL(await response.blob());
+          const link = document.createElement('a'); link.href = url; link.download = 'clients.xlsx'; link.click();
+          URL.revokeObjectURL(url);
+        } catch (error) { clientsStatus.className = 'error'; clientsStatus.textContent = error.message; }
+        finally { clientsDownload.disabled = false; }
+      });
+
+      const taskDateText = value => value
+        ? new Date(value).toLocaleString('ru-RU', {dateStyle: 'short', timeStyle: 'short'}) : '—';
+
+      function renderTasks() {
+        tasksList.replaceChildren();
+        const filter = tasksFilter.value;
+        const items = (tasksData.items || []).filter(item => filter === 'all' || item.origin === filter);
+        tasksStatus.textContent = `Показано: ${items.length} из ${tasksData.totals.all}`;
+        document.getElementById('tasks-meta').textContent =
+          `Ручных: ${tasksData.totals.manual} · автоматических: ${tasksData.totals.automatic} · звонков: ${tasksData.totals.calls}`;
+        items.forEach(item => {
+          const card = document.createElement('article'); card.className = 'task-card';
+          const head = document.createElement('div'); head.className = 'client-head';
+          const title = document.createElement('a'); title.className = 'task-title'; title.href = item.task_url;
+          title.target = '_blank'; title.rel = 'noopener noreferrer'; title.textContent = item.title;
+          const origin = document.createElement('span'); origin.className = `task-origin ${item.origin}`;
+          origin.textContent = item.origin === 'automatic' ? 'Робот' : 'Ручная'; head.append(title, origin);
+          const responsible = document.createElement('div'); responsible.className = 'task-line';
+          responsible.textContent = `${item.responsible_name} · ${item.type}`;
+          const deadline = document.createElement('div'); deadline.className = 'task-line';
+          const deadlineLabel = document.createElement('span'); deadlineLabel.textContent = `Срок: ${taskDateText(item.deadline)}`;
+          const taskStatus = document.createElement('span'); taskStatus.textContent = item.status; deadline.append(deadlineLabel, taskStatus);
+          const callback = document.createElement('div'); callback.className = 'worktime-breaks';
+          callback.textContent = item.type === 'Звонок' ? `Перезвон ±15 минут: ${item.callback_status}` : `Постановщик: ${item.creator_name}`;
+          card.append(head, responsible, deadline, callback); tasksList.append(card);
+        });
+        if (!items.length) {
+          const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = 'За выбранный период задач нет'; tasksList.append(empty);
+        }
+        tasksDownload.classList.remove('hidden');
+      }
+
+      async function loadTasks() {
+        if (!tasksStart.value || !tasksEnd.value || tasksStart.value > tasksEnd.value) {
+          tasksStatus.className = 'error'; tasksStatus.textContent = 'Проверьте выбранные даты'; return;
+        }
+        tasksLoad.disabled = true; tasksStatus.className = ''; tasksStatus.textContent = 'Загружаю задачи…';
+        try {
+          const params = new URLSearchParams({start: tasksStart.value, end: tasksEnd.value});
+          const response = await fetch(`/api/miniapp/tasks?${params}`, {headers: requestHeaders()});
+          if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.detail || 'Не удалось загрузить задачи'); }
+          tasksData = await response.json(); renderTasks();
+        } catch (error) { tasksStatus.className = 'error'; tasksStatus.textContent = error.message; }
+        finally { tasksLoad.disabled = false; }
+      }
+
+      function openTasks() { showReportSection('tasks'); if (tasksData) renderTasks(); else loadTasks(); }
+      tasksNav.addEventListener('click', openTasks);
+      tasksLoad.addEventListener('click', loadTasks);
+      tasksFilter.addEventListener('change', () => { if (tasksData) renderTasks(); });
+      tasksDownload.addEventListener('click', async () => {
+        tasksDownload.disabled = true;
+        try {
+          const params = new URLSearchParams({start: tasksStart.value, end: tasksEnd.value});
+          const response = await fetch(`/api/miniapp/tasks.xlsx?${params}`, {headers: requestHeaders()});
+          if (!response.ok) throw new Error('Не удалось сформировать Excel');
+          const url = URL.createObjectURL(await response.blob());
+          const link = document.createElement('a'); link.href = url; link.download = `tasks-${tasksStart.value}-${tasksEnd.value}.xlsx`; link.click();
+          URL.revokeObjectURL(url);
+        } catch (error) { tasksStatus.className = 'error'; tasksStatus.textContent = error.message; }
+        finally { tasksDownload.disabled = false; }
+      });
+
+      const clockText = value => value ? new Date(value).toLocaleTimeString('ru-RU', {hour: '2-digit', minute: '2-digit'}) : '—';
+
+      function renderWorktime(payload) {
+        worktimeList.replaceChildren();
+        worktimeStatus.textContent = `Менеджеров: ${payload.manager_count} · строк: ${payload.items.length}`;
+        payload.items.forEach(item => {
+          const card = document.createElement('article'); card.className = 'worktime-card';
+          const head = document.createElement('div'); head.className = 'worktime-head';
+          const name = document.createElement('span'); name.textContent = item.manager_name;
+          const day = document.createElement('span'); day.className = 'worktime-date'; day.textContent = shortDate(item.date);
+          head.append(name, day);
+          const metrics = document.createElement('div'); metrics.className = 'worktime-metrics';
+          [['Начало', clockText(item.start_at)], ['Конец', clockText(item.end_at)], ['В работе', durationText(item.work_seconds)]].forEach(([label, value]) => {
+            const metric = document.createElement('div'); metric.className = 'worktime-metric';
+            const caption = document.createElement('span'); caption.textContent = label;
+            const strong = document.createElement('strong'); strong.textContent = value;
+            metric.append(caption, strong); metrics.append(metric);
+          });
+          const breaks = document.createElement('div'); breaks.className = 'worktime-breaks';
+          breaks.textContent = item.breaks.length
+            ? `Перерывы: ${item.breaks.map(entry => `${clockText(entry.start_at)}–${entry.ongoing ? 'сейчас' : clockText(entry.end_at)}`).join(', ')} · всего ${durationText(item.break_seconds)}`
+            : 'Перерывов не зафиксировано';
+          card.append(head, metrics, breaks); worktimeList.append(card);
+        });
+        if (!payload.items.length) {
+          const empty = document.createElement('div'); empty.className = 'empty'; empty.textContent = 'За период событий рабочего времени нет';
+          worktimeList.append(empty);
+        }
+        worktimeDownload.classList.remove('hidden');
+      }
+
+      async function loadWorktime() {
+        if (!worktimeStart.value || !worktimeEnd.value || worktimeStart.value > worktimeEnd.value) {
+          worktimeStatus.className = 'error'; worktimeStatus.textContent = 'Проверьте выбранные даты'; return;
+        }
+        worktimeLoad.disabled = true; worktimeStatus.className = ''; worktimeStatus.textContent = 'Загружаю табель…';
+        try {
+          const params = new URLSearchParams({start: worktimeStart.value, end: worktimeEnd.value});
+          const response = await fetch(`/api/miniapp/worktime?${params}`, {headers: requestHeaders()});
+          if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.detail || 'Не удалось загрузить табель'); }
+          renderWorktime(await response.json());
+        } catch (error) { worktimeStatus.className = 'error'; worktimeStatus.textContent = error.message; }
+        finally { worktimeLoad.disabled = false; }
+      }
+
+      function openWorktime() {
+        showReportSection('worktime');
+        loadWorktime();
+      }
+      worktimeNav.addEventListener('click', openWorktime);
+      worktimeLoad.addEventListener('click', loadWorktime);
+      worktimeDownload.addEventListener('click', async () => {
+        worktimeDownload.disabled = true;
+        try {
+          const params = new URLSearchParams({start: worktimeStart.value, end: worktimeEnd.value});
+          const response = await fetch(`/api/miniapp/worktime.xlsx?${params}`, {headers: requestHeaders()});
+          if (!response.ok) throw new Error('Не удалось сформировать Excel');
+          const url = URL.createObjectURL(await response.blob());
+          const link = document.createElement('a'); link.href = url; link.download = `worktime-${worktimeStart.value}-${worktimeEnd.value}.xlsx`; link.click();
+          URL.revokeObjectURL(url);
+        } catch (error) { worktimeStatus.className = 'error'; worktimeStatus.textContent = error.message; }
+        finally { worktimeDownload.disabled = false; }
+      });
+
+      fetch('/api/miniapp/access', {headers: requestHeaders()})
+        .then(response => response.ok ? response.json() : null)
+        .then(access => { if (access && access.calls) callsNav.classList.remove('hidden'); })
+        .catch(() => {});
+
+      loadPresence();
+      window.setInterval(loadPresence, 60000);
+
       async function buildReport(params) {
         const started = await fetch(`/api/miniapp/report/jobs?${params}`, {
           method: 'POST', headers: requestHeaders()
@@ -428,6 +933,23 @@
           status.className = 'error'; status.textContent = error.message;
           if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred('error');
         } finally { buildButton.disabled = false; }
+      });
+
+      salesDownload.addEventListener('click', async () => {
+        status.className = '';
+        if (!startInput.value || !endInput.value || startInput.value > endInput.value) {
+          status.className = 'error'; status.textContent = 'Проверьте выбранные даты'; return;
+        }
+        salesDownload.disabled = true; status.textContent = 'Формирую стандартную выгрузку…';
+        try {
+          const params = new URLSearchParams({start: startInput.value, end: endInput.value});
+          const response = await fetch(`/api/miniapp/sales.xlsx?${params}`, {headers: requestHeaders()});
+          if (!response.ok) { const body = await response.json().catch(() => ({})); throw new Error(body.detail || 'Не удалось сформировать выгрузку'); }
+          const url = URL.createObjectURL(await response.blob());
+          const link = document.createElement('a'); link.href = url; link.download = `sales-${startInput.value}-${endInput.value}.xlsx`; link.click();
+          URL.revokeObjectURL(url); status.textContent = 'Выгрузка готова';
+        } catch (error) { status.className = 'error'; status.textContent = error.message; }
+        finally { salesDownload.disabled = false; }
       });
     })();
   </script>

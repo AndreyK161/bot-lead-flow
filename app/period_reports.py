@@ -17,6 +17,7 @@ from openpyxl.utils import get_column_letter
 from app import outcomes, stats
 from app.bitrix_client import BitrixClient
 from app.config import get_settings
+from app.sales_team import assignable_sales_users
 from app.telegram_client import send_telegram_document, send_telegram_message
 
 logger = logging.getLogger(__name__)
@@ -66,6 +67,7 @@ async def collect_live_period(
         client.get_deal_stages(settings.accompaniment_deal_category_id),
         client.get_department_users(settings.sales_department_id),
     )
+    sales_users = assignable_sales_users(sales_users, settings)
     notify(25, f"Загружено лидов: {len(leads)}")
     lead_ids = [str(lead["ID"]) for lead in leads]
     contact_ids = [str(lead.get("CONTACT_ID") or "") for lead in leads]

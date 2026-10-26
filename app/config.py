@@ -1,6 +1,15 @@
+import ast
+import json
 from functools import lru_cache
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def lead_notification_recipient_ids(settings) -> set[int]:
+    """Privileged users who should receive newly created lead/deal cards."""
+    return set(settings.director_user_id_set) - set(
+        getattr(settings, "lead_notification_excluded_user_id_set", set())
+    )
 
 
 class Settings(BaseSettings):
@@ -37,6 +46,18 @@ class Settings(BaseSettings):
     def director_user_id_set(self) -> set[int]:
         return {int(x.strip()) for x in self.director_users.split(",") if x.strip()}
 
+    # Пользователи сохраняют руководительские/админские права, но не получают
+    # общий поток карточек. Персональное уведомление о назначении сохраняется.
+    lead_notification_excluded_users: str = ""
+
+    @property
+    def lead_notification_excluded_user_id_set(self) -> set[int]:
+        return {
+            int(value.strip())
+            for value in self.lead_notification_excluded_users.split(",")
+            if value.strip()
+        }
+
     # Telegram user_id админов бота — только привязка продажник↔Telegram (/link, /links), к лидам доступа нет
     admin_users: str = ""
 
@@ -44,13 +65,35 @@ class Settings(BaseSettings):
     def admin_user_id_set(self) -> set[int]:
         return {int(x.strip()) for x in self.admin_users.split(",") if x.strip()}
 
+    # Закрытые разделы Mini App с персональными данными звонков.
+    super_admin_users: str = "1297686797"
+
+    @property
+    def super_admin_user_id_set(self) -> set[int]:
+        return {int(x.strip()) for x in self.super_admin_users.split(",") if x.strip()}
+
     @property
     def mini_app_user_id_set(self) -> set[int]:
         """Directors and technical admins may open analytical reports."""
-        return self.director_user_id_set | self.admin_user_id_set
+        return self.director_user_id_set | self.admin_user_id_set | self.super_admin_user_id_set
 
     # Отдел в Bitrix, из которого предлагать список ответственных при назначении
     sales_department_id: str
+    # Руководители и другие сотрудники отдела, которых нельзя назначать ответственными.
+    excluded_sales_user_ids: str = "26"
+    excluded_sales_user_names: str = "Анастасия Коравчук"
+
+    @property
+    def excluded_sales_user_id_set(self) -> set[str]:
+        return {value.strip() for value in self.excluded_sales_user_ids.split(",") if value.strip()}
+
+    @property
+    def excluded_sales_user_name_set(self) -> set[str]:
+        return {
+            value.strip().casefold()
+            for value in self.excluded_sales_user_names.split(",")
+            if value.strip()
+        }
 
     # PostgreSQL используется в production; SQLite остаётся fallback для тестов/локальной разработки.
     database_url: str = ""
@@ -67,7 +110,59 @@ class Settings(BaseSettings):
     outcome_sync_time: str = "03:00"
     accompaniment_deal_category_id: str = "2"
     contract_source_url_field: str = "UF_CRM_1775217002"
+    deal_refusal_reason_field: str = "UF_CRM_REFUSAL_REASON_OP"
+    deal_contract_date_field: str = "UF_CRM_CONTRACT_DATE_OP"
     mini_app_url: str = "https://lead.prav-buro.ru/miniapp"
+    manager_app_url: str = "https://tg.prav-buro.ru/workday/"
+    manager_planner_database_path: str = "data/manager_planner.sqlite3"
+    mode_switch_user_id: int = 1297686797
+    # Temporary read-only bridge used while the legacy distribution bot is
+    # still online. An empty path keeps the bridge fully disabled.
+    legacy_distribution_queue_path: str = ""
+    legacy_distribution_confirmer_ids: str = ""
+    legacy_distribution_poll_seconds: float = 30
+    distribution_confirmer_ids: str = "1297686797"
+    leadflow_presence_url: str = "https://lead.prav-buro.ru/api/v1/users/internal-presence"
+    leadflow_presence_token: str = ""
+    megafon_crm_token: str = ""
+    megafon_bitrix_user_map: str = "{}"
+    bitrix_automation_user_ids: str = "24"
+
+    @property
+    def legacy_distribution_confirmer_id_set(self) -> set[int]:
+        return {
+            int(value.strip())
+            for value in self.legacy_distribution_confirmer_ids.split(",")
+            if value.strip()
+        }
+
+    @property
+    def distribution_confirmer_id_set(self) -> set[int]:
+        return {
+            int(value.strip())
+            for value in self.distribution_confirmer_ids.split(",")
+            if value.strip()
+        }
+
+    @property
+    def bitrix_automation_user_id_set(self) -> set[str]:
+        return {
+            value.strip() for value in self.bitrix_automation_user_ids.split(",")
+            if value.strip()
+        }
+
+    @property
+    def megafon_bitrix_users(self) -> dict[str, str]:
+        raw = self.megafon_bitrix_user_map or "{}"
+        try:
+            value = json.loads(raw)
+        except json.JSONDecodeError:
+            # Existing telephony service may provide a Python-style numeric mapping
+            # such as {101: 42}; literal_eval keeps this fallback data-only.
+            value = ast.literal_eval(raw)
+        if not isinstance(value, dict):
+            raise ValueError("MEGAFON_BITRIX_USER_MAP must be an object")
+        return {str(extension): str(user_id) for extension, user_id in value.items()}
 
 
 @lru_cache

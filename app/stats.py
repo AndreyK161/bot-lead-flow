@@ -82,6 +82,7 @@ def record(
         else _setting("deal_unprocessed_stage_id", "NEW")
     )
     stage_id = str(item.get(stage_field) or "")
+    category_id = str(item.get("CATEGORY_ID") or "") if entity_type == "deal" else None
     assignee_id = str(item.get("ASSIGNED_BY_ID") or "")
     source_id = str(item.get("SOURCE_ID") or "")
     existing_rows = store.rows(
@@ -131,23 +132,23 @@ def record(
                 existing["current_assignee_id"], assignee_id, timestamp,
             )
         store.execute(
-            """UPDATE crm_items SET source_id=?,source_name=?,current_stage_id=?,
+            """UPDATE crm_items SET source_id=?,source_name=?,current_stage_id=?,current_category_id=?,
                current_assignee_id=?,current_assignee_name=?,processed_at=?,processed_by_id=?,
                processed_by_name=?,updated_at=?
                WHERE entity_type=? AND entity_id=?""",
-            (source_id, resolved_source_name, stage_id, assignee_id, resolved_assignee_name,
+            (source_id, resolved_source_name, stage_id, category_id, assignee_id, resolved_assignee_name,
              processed_at, processed_by_id, processed_by_name, timestamp, entity_type, entity_id),
         )
     else:
         first_seen_at = (_bitrix_datetime(item.get("DATE_CREATE")) or event_time).isoformat()
         store.execute(
             """INSERT INTO crm_items
-               (entity_type,entity_id,source_id,source_name,created_date,current_stage_id,
+               (entity_type,entity_id,source_id,source_name,created_date,current_stage_id,current_category_id,
                 current_assignee_id,current_assignee_name,processed_at,processed_by_id,
                 processed_by_name,first_seen_at,updated_at)
-               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+               VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
             (entity_type, entity_id, source_id, source_name, _created_date(item.get("DATE_CREATE"), now),
-             stage_id, assignee_id, assignee_name, processed_at, processed_by_id,
+             stage_id, category_id, assignee_id, assignee_name, processed_at, processed_by_id,
              processed_by_name, first_seen_at, timestamp),
         )
         _event(entity_type, entity_id, "created", None, stage_id, timestamp)

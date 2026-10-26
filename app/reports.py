@@ -12,6 +12,7 @@ from app import stats, store
 from app.bitrix_client import BitrixClient
 from app.config import get_settings
 from app.formatter import build_daily_report_body
+from app.sales_team import assignable_sales_users
 from app.telegram_client import send_telegram_message
 
 logger = logging.getLogger(__name__)
@@ -96,7 +97,10 @@ async def send_daily_reports(report_now: datetime | None = None) -> None:
             "REPORT_ASSIGNED_BY_ID": row["processed_by_id"],
         })
         lead_ids.add(row["entity_id"])
-    sales_ids = {str(user["ID"]) for user in await client.get_department_users(settings.sales_department_id)}
+    sales_users = assignable_sales_users(
+        await client.get_department_users(settings.sales_department_id), settings,
+    )
+    sales_ids = {str(user["ID"]) for user in sales_users}
     by_manager = {
         manager_id: manager_leads
         for manager_id, manager_leads in _group_leads_by_manager(leads).items()
