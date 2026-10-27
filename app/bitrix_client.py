@@ -88,9 +88,24 @@ class BitrixClient:
 
     async def _call_payload(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         url = self._base_url + method
-        response = await _http_client().post(url, json=params or {})
-        response.raise_for_status()
-        payload = response.json()
+        try:
+            response = await _http_client().post(url, json=params or {})
+            response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            # httpx includes the complete request URL in its exception text. A Bitrix
+            # incoming-webhook URL contains a credential, so never let that exception
+            # reach application logs unchanged.
+            raise BitrixApiError(
+                f"{method}: Bitrix HTTP {exc.response.status_code}"
+            ) from None
+        except httpx.RequestError as exc:
+            raise BitrixTransportError(
+                f"{method}: Bitrix transport error ({type(exc).__name__})"
+            ) from None
+        try:
+            payload = response.json()
+        except ValueError:
+            raise BitrixApiError(f"{method}: Bitrix returned invalid JSON") from None
         if "error" in payload:
             raise BitrixApiError(f"{method}: {payload.get('error')} — {payload.get('error_description')}")
         return payload
@@ -636,4 +651,8 @@ class BitrixClient:
 
 
 class BitrixApiError(RuntimeError):
-    """Битрикс вернул ошибку в теле ответа (200 OK, но {"error": ...})."""
+    """Bitrix rejected a request without exposing its credential-bearing URL."""
+
+
+class BitrixTransportError(BitrixApiError):
+    """A retryable network failure while contacting Bitrix."""

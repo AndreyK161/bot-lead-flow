@@ -23,6 +23,9 @@ def _schema(*, postgres: bool) -> str:
             source_id TEXT, source_name TEXT, lead_id TEXT UNIQUE,
             manager TEXT, manager_id TEXT, comment TEXT, bot_kind TEXT DEFAULT 'legacy',
             main_message_id BIGINT, dirty INTEGER DEFAULT 1, duplicate_of TEXT,
+            recovery_attempts INTEGER NOT NULL DEFAULT 0,
+            recovery_next_at {timestamp}, recovery_failed_at {timestamp},
+            recovery_last_error TEXT,
             created_at {timestamp} DEFAULT CURRENT_TIMESTAMP
         );
         CREATE TABLE IF NOT EXISTS sources (
@@ -181,6 +184,10 @@ def _initialize_sqlite(conn: sqlite3.Connection) -> None:
         "comment": "TEXT",
         "bot_kind": "TEXT DEFAULT 'legacy'",
         "duplicate_of": "TEXT",
+        "recovery_attempts": "INTEGER NOT NULL DEFAULT 0",
+        "recovery_next_at": "TEXT",
+        "recovery_failed_at": "TEXT",
+        "recovery_last_error": "TEXT",
         "created_at": "TEXT",
     }
     for name, definition in additions.items():
@@ -215,6 +222,10 @@ def _initialize_postgres(conn) -> None:
         "ALTER TABLE submissions ADD COLUMN IF NOT EXISTS comment TEXT",
         "ALTER TABLE submissions ADD COLUMN IF NOT EXISTS bot_kind TEXT DEFAULT 'legacy'",
         "ALTER TABLE submissions ADD COLUMN IF NOT EXISTS duplicate_of TEXT",
+        "ALTER TABLE submissions ADD COLUMN IF NOT EXISTS recovery_attempts INTEGER NOT NULL DEFAULT 0",
+        "ALTER TABLE submissions ADD COLUMN IF NOT EXISTS recovery_next_at TIMESTAMPTZ",
+        "ALTER TABLE submissions ADD COLUMN IF NOT EXISTS recovery_failed_at TIMESTAMPTZ",
+        "ALTER TABLE submissions ADD COLUMN IF NOT EXISTS recovery_last_error TEXT",
         "ALTER TABLE submissions ADD COLUMN IF NOT EXISTS created_at TIMESTAMPTZ DEFAULT CURRENT_TIMESTAMP",
         "ALTER TABLE crm_items ADD COLUMN IF NOT EXISTS current_stage_name TEXT",
         "ALTER TABLE crm_items ADD COLUMN IF NOT EXISTS current_category_id TEXT",

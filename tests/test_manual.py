@@ -153,6 +153,38 @@ class ManualMainBotTests(unittest.IsolatedAsyncioTestCase):
         await manual.handle_main_callback(self.callback(f'mskip:{row["id"]}'),4)
         self.assertEqual(store.submission(row['id'])['state'],'comment')
 
+    async def test_recovery_does_not_reopen_clean_submitted_lead(self):
+        row = await self.reach_comment()
+        await manual.handle_main_callback(self.callback(f'mskip:{row["id"]}'), 4)
+        saved = store.submission(row['id'])
+        self.assertEqual(saved['state'], 'submitted')
+        self.assertEqual(saved['dirty'], 0)
+        self.client.get_lead.reset_mock()
+
+        await manual.recover()
+
+        self.client.get_lead.assert_not_awaited()
+
+    async def test_recovery_stops_after_configured_attempt_limit(self):
+        row = await self.reach_comment()
+        await manual.handle_main_callback(self.callback(f'mskip:{row["id"]}'), 4)
+        saved = store.submission(row['id'])
+        store.execute('DELETE FROM deliveries WHERE submission_id=?', (saved['id'],))
+        store.save(saved['id'], dirty=1, recovery_attempts=4)
+        self.client.get_lead.side_effect = BitrixApiError('crm.lead.get: Bitrix HTTP 400')
+
+        await manual.recover()
+
+        failed = store.submission(saved['id'])
+        self.assertEqual(failed['recovery_attempts'], 5)
+        self.assertIsNotNone(failed['recovery_failed_at'])
+        self.assertEqual(failed['dirty'], 0)
+        self.assertNotIn('https://', failed['recovery_last_error'])
+
+        self.client.get_lead.reset_mock()
+        await manual.recover()
+        self.client.get_lead.assert_not_awaited()
+
     async def test_junk_preserves_lead(self):
         row=await self.reach_comment()
         await manual.handle_main_callback(self.callback(f'mskip:{row["id"]}'),4)

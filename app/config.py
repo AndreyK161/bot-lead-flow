@@ -107,6 +107,8 @@ class Settings(BaseSettings):
     reconcile_interval_seconds: int = 300
     reconcile_overlap_seconds: int = 300
     reconcile_initial_lookback_hours: int = 24
+    manual_recovery_max_attempts: int = 5
+    manual_recovery_base_delay_seconds: int = 30
     outcome_sync_time: str = "03:00"
     accompaniment_deal_category_id: str = "2"
     contract_source_url_field: str = "UF_CRM_1775217002"

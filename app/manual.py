@@ -5,13 +5,14 @@ import asyncio
 import logging
 import re
 import uuid
+from datetime import datetime, timedelta, timezone
 from html import escape
 from urllib.parse import urlparse
 
 import httpx
 
 from app import stats, store
-from app.bitrix_client import BitrixApiError, BitrixClient
+from app.bitrix_client import BitrixApiError, BitrixClient, BitrixTransportError
 from app.config import get_settings, lead_notification_recipient_ids
 from app.formatter import build_lead_notification, build_manage_keyboard
 from app.sales_team import assignable_sales_users
@@ -22,6 +23,8 @@ lock = asyncio.Lock()
 MARKER = "manual-bot:"
 ACTIVE_STATES = ("draft", "manager", "comment", "duplicate", "creating", "uncertain")
 MAIN_ACTIONS = {"mp", "mt", "ms", "mm", "mskip", "mforce", "mc", "mtrash", "mconfirm", "mkeep"}
+RECOVERY_MAX_ATTEMPTS = 5
+RECOVERY_MAX_DELAY_SECONDS = 3600
 
 
 def button(text, data):
@@ -208,6 +211,10 @@ async def _create(row, telegram_user_id):
     }
     try:
         lead_id = await BitrixClient().add_lead(fields)
+    except BitrixTransportError:
+        store.save(row["id"], state="uncertain", dirty=1)
+        await sync(store.submission(row["id"]))
+        return
     except BitrixApiError:
         store.save(row["id"], state="comment", dirty=1)
         await sync(store.submission(row["id"]))
@@ -253,19 +260,66 @@ async def _finish(row, telegram_user_id, *, force=False):
 
 async def recover():
     async with lock:
-        for row in store.rows("SELECT * FROM submissions WHERE state IN ('creating','uncertain')"):
-            result = await BitrixClient()._call("crm.lead.list", {
-                "filter": {"=SOURCE_DESCRIPTION": MARKER + row["id"]}, "select": ["ID"],
-            })
-            if result:
-                store.save(row["id"], lead_id=str(result[0]["ID"]), state="submitted", dirty=1)
-        for row in store.rows("SELECT * FROM submissions WHERE dirty=1 OR state='submitted'"):
+        now = datetime.now(timezone.utc)
+        candidates = store.rows(
+            "SELECT * FROM submissions "
+            "WHERE recovery_failed_at IS NULL "
+            "AND (dirty=1 OR state IN ('creating','uncertain')) "
+            "AND (recovery_next_at IS NULL OR recovery_next_at<=?) "
+            "ORDER BY created_at,id",
+            (now.isoformat(),),
+        )
+        for row in candidates:
             try:
+                if row["state"] in {"creating", "uncertain"}:
+                    result = await BitrixClient()._call("crm.lead.list", {
+                        "filter": {"=SOURCE_DESCRIPTION": MARKER + row["id"]},
+                        "select": ["ID"],
+                    })
+                    if not result:
+                        raise BitrixTransportError("crm.lead.list: lead result is not visible yet")
+                    store.save(
+                        row["id"], lead_id=str(result[0]["ID"]),
+                        state="submitted", dirty=1,
+                    )
+                    row = store.submission(row["id"])
                 await publish(row)
                 if row["dirty"]:
                     await sync(store.submission(row["id"]))
-            except Exception:
-                logger.exception("Manual lead recovery failed for %s", row["id"])
+                store.save(
+                    row["id"], recovery_attempts=0, recovery_next_at=None,
+                    recovery_failed_at=None, recovery_last_error=None,
+                )
+            except Exception as exc:
+                attempts = int(row.get("recovery_attempts") or 0) + 1
+                max_attempts = max(
+                    1, int(getattr(get_settings(), "manual_recovery_max_attempts", RECOVERY_MAX_ATTEMPTS))
+                )
+                safe_error = f"{type(exc).__name__}: {exc}"[:1000]
+                if attempts >= max_attempts:
+                    store.save(
+                        row["id"], recovery_attempts=attempts,
+                        recovery_next_at=None, recovery_failed_at=now.isoformat(),
+                        recovery_last_error=safe_error, dirty=0,
+                    )
+                    logger.error(
+                        "Manual lead recovery stopped submission_id=%s attempts=%s error=%s",
+                        row["id"], attempts, safe_error,
+                    )
+                    continue
+                base_delay = max(
+                    15, int(getattr(get_settings(), "manual_recovery_base_delay_seconds", 30))
+                )
+                delay = min(RECOVERY_MAX_DELAY_SECONDS, base_delay * 2 ** (attempts - 1))
+                store.save(
+                    row["id"], recovery_attempts=attempts,
+                    recovery_next_at=(now + timedelta(seconds=delay)).isoformat(),
+                    recovery_last_error=safe_error,
+                )
+                logger.warning(
+                    "Manual lead recovery deferred submission_id=%s attempts=%s retry_in=%ss error=%s",
+                    row["id"], attempts, delay, safe_error,
+                )
 
 
 async def recovery_loop():
