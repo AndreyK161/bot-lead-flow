@@ -34,13 +34,44 @@
     .presence-updated { color: var(--hint); font-size: 10px; text-align: right; }
     .presence-list { display: flex; gap: 8px; overflow-x: auto; margin: 0 -2px; padding: 2px; scrollbar-width: none; }
     .presence-list::-webkit-scrollbar { display: none; }
-    .presence-item { flex: 0 0 auto; display: grid; grid-template-columns: auto auto; align-items: center; column-gap: 8px; min-width: 128px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); }
+    .presence-item { flex: 0 0 auto; display: grid; grid-template-columns: auto auto auto; align-items: center; column-gap: 8px; min-width: 128px; padding: 9px 11px; border: 1px solid var(--line); border-radius: 12px; background: var(--bg); color: var(--text); font: inherit; text-align: left; cursor: pointer; }
+    .presence-item:active { transform: scale(.985); }
+    .presence-item:focus-visible { outline: 2px solid var(--button); outline-offset: 2px; }
     .presence-dot { width: 10px; height: 10px; border-radius: 50%; background: #d92d20; box-shadow: 0 0 0 3px color-mix(in srgb, #d92d20 18%, transparent); }
     .presence-name { max-width: 150px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 12px; font-weight: 700; }
     .presence-label { grid-column: 2; margin-top: 2px; color: var(--hint); font-size: 10px; }
+    .presence-arrow { grid-column: 3; grid-row: 1 / span 2; color: var(--hint); font-size: 18px; }
     .presence-item.working .presence-dot { background: #12b76a; box-shadow: 0 0 0 3px color-mix(in srgb, #12b76a 18%, transparent); }
     .presence-item.break .presence-dot { background: #f79009; box-shadow: 0 0 0 3px color-mix(in srgb, #f79009 20%, transparent); }
     .presence-empty { color: var(--hint); font-size: 12px; }
+    .manager-detail { display: grid; gap: 14px; }
+    .manager-detail-head { display: flex; align-items: center; gap: 11px; }
+    .manager-detail-back { width: 38px; height: 38px; border: 1px solid var(--line); border-radius: 12px; background: var(--card); color: var(--text); font: inherit; font-size: 21px; cursor: pointer; }
+    .manager-detail-title { min-width: 0; flex: 1; }
+    .manager-detail-title h2 { margin: 0; font-size: 22px; line-height: 1.15; overflow-wrap: anywhere; }
+    .manager-detail-title p { margin: 4px 0 0; color: var(--hint); font-size: 12px; }
+    .manager-detail-grid { display: grid; grid-template-columns: repeat(2, 1fr); gap: 9px; }
+    .manager-stat { min-width: 0; padding: 14px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); }
+    .manager-stat.primary { background: var(--accent-soft); border-color: color-mix(in srgb, var(--button) 30%, var(--line)); }
+    .manager-stat strong { display: block; font-size: 26px; line-height: 1.05; color: var(--button); overflow-wrap: anywhere; }
+    .manager-stat span { display: block; margin-top: 5px; color: var(--hint); font-size: 12px; }
+    .manager-detail-section { padding: 15px; border: 1px solid var(--line); border-radius: 15px; background: var(--card); }
+    .manager-detail-section h3 { margin: 0 0 10px; font-size: 14px; }
+    .manager-stage-list { display: flex; flex-wrap: wrap; gap: 7px; }
+    .manager-stage { padding: 6px 9px; border-radius: 999px; background: var(--bg); color: var(--hint); font-size: 11px; }
+    .manager-stage b { color: var(--text); }
+    .manager-detail-status { min-height: 20px; color: var(--hint); text-align: center; font-size: 13px; }
+    body.manager-detail-open > main > h1,
+    body.manager-detail-open > main > .subtitle,
+    body.manager-detail-open > main > .presence-panel,
+    body.manager-detail-open > main > .app-nav,
+    body.manager-detail-open > main > .report-sections,
+    body.manager-detail-open > main > #report-controls,
+    body.manager-detail-open > main > #report,
+    body.manager-detail-open > main > #calls-view,
+    body.manager-detail-open > main > #clients-view,
+    body.manager-detail-open > main > #tasks-view,
+    body.manager-detail-open > main > #worktime-view { display: none !important; }
     .quick { display: flex; gap: 7px; overflow-x: auto; margin: 0 -2px 15px; padding: 2px; scrollbar-width: none; }
     .quick::-webkit-scrollbar { display: none; }
     .chip, .tab, .manager-toggle, .all-managers {
@@ -190,6 +221,31 @@
       </div>
       <div id="presence-list" class="presence-list" aria-live="polite">
         <span class="presence-empty">Загружаю статусы…</span>
+      </div>
+    </section>
+
+    <section id="manager-detail" class="manager-detail hidden" aria-live="polite">
+      <div class="manager-detail-head">
+        <button id="manager-detail-back" class="manager-detail-back" aria-label="Назад к менеджерам">‹</button>
+        <div class="manager-detail-title">
+          <h2 id="manager-detail-name">Менеджер</h2>
+          <p id="manager-detail-meta">Статистика за сегодня</p>
+        </div>
+      </div>
+      <div id="manager-detail-status" class="manager-detail-status"></div>
+      <div id="manager-detail-content" class="hidden">
+        <div class="manager-detail-grid">
+          <div class="manager-stat primary"><strong id="manager-leads">0</strong><span>Обработано лидов</span></div>
+          <div class="manager-stat primary"><strong id="manager-call-duration">—</strong><span>Общая длительность</span></div>
+          <div class="manager-stat"><strong id="manager-calls">0</strong><span>Всего звонков</span></div>
+          <div class="manager-stat"><strong id="manager-outbound">0</strong><span>Исходящих</span></div>
+          <div class="manager-stat"><strong id="manager-answered">0</strong><span>Успешных</span></div>
+          <div class="manager-stat"><strong id="manager-long-calls">0</strong><span>Дольше 3 минут</span></div>
+        </div>
+        <section id="manager-stages-section" class="manager-detail-section hidden" style="margin-top:14px">
+          <h3>Стадии обработанных лидов</h3>
+          <div id="manager-stage-list" class="manager-stage-list"></div>
+        </section>
       </div>
     </section>
 
@@ -367,6 +423,12 @@
       const worktimeDownload = document.getElementById('worktime-download');
       const presenceList = document.getElementById('presence-list');
       const presenceUpdated = document.getElementById('presence-updated');
+      const managerDetail = document.getElementById('manager-detail');
+      const managerDetailBack = document.getElementById('manager-detail-back');
+      const managerDetailName = document.getElementById('manager-detail-name');
+      const managerDetailMeta = document.getElementById('manager-detail-meta');
+      const managerDetailStatus = document.getElementById('manager-detail-status');
+      const managerDetailContent = document.getElementById('manager-detail-content');
       let data = null;
       let clientsData = null;
       let tasksData = null;
@@ -558,6 +620,64 @@
         working: 'Работает', break: 'На обеде', offline: 'Не работает', unknown: 'Нет данных'
       };
 
+      const aggregateDurationText = seconds => {
+        seconds = Number(seconds || 0);
+        const hours = Math.floor(seconds / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        if (hours) return `${hours} ч ${minutes} мин`;
+        if (minutes) return `${minutes} мин`;
+        return `${seconds} сек`;
+      };
+
+      function closeManagerDetail() {
+        document.body.classList.remove('manager-detail-open');
+        managerDetail.classList.add('hidden');
+      }
+
+      async function openManagerDetail(manager) {
+        document.body.classList.add('manager-detail-open');
+        managerDetail.classList.remove('hidden');
+        managerDetailName.textContent = manager.name;
+        managerDetailMeta.textContent = `${presenceLabels[manager.status] || presenceLabels.unknown} · статистика за сегодня`;
+        managerDetailContent.classList.add('hidden');
+        managerDetailStatus.className = 'manager-detail-status';
+        managerDetailStatus.innerHTML = '<span class="spinner"></span>Загружаю статистику…';
+        if (!manager.bitrix_id) {
+          managerDetailStatus.className = 'manager-detail-status error';
+          managerDetailStatus.textContent = 'Менеджер пока не привязан к Bitrix24';
+          return;
+        }
+        try {
+          const response = await fetch(`/api/miniapp/managers/${manager.bitrix_id}/stats`, {headers: requestHeaders()});
+          if (!response.ok) throw new Error('Не удалось загрузить статистику');
+          const payload = await response.json();
+          managerDetailName.textContent = payload.manager.name;
+          managerDetailMeta.textContent = `${presenceLabels[payload.manager.status] || presenceLabels.unknown} · ${shortDate(payload.day)}`;
+          document.getElementById('manager-leads').textContent = payload.leads.processed;
+          document.getElementById('manager-call-duration').textContent = aggregateDurationText(payload.calls.duration_seconds);
+          document.getElementById('manager-calls').textContent = payload.calls.total;
+          document.getElementById('manager-outbound').textContent = payload.calls.outbound;
+          document.getElementById('manager-answered').textContent = payload.calls.answered;
+          document.getElementById('manager-long-calls').textContent = payload.calls.long_calls;
+          const stageList = document.getElementById('manager-stage-list');
+          const stageSection = document.getElementById('manager-stages-section');
+          stageList.replaceChildren();
+          Object.entries(payload.leads.stages || {}).forEach(([stage, count]) => {
+            const item = document.createElement('span'); item.className = 'manager-stage';
+            item.append(document.createTextNode(`${stage} · `));
+            const value = document.createElement('b'); value.textContent = count; item.append(value); stageList.append(item);
+          });
+          stageSection.classList.toggle('hidden', stageList.childElementCount === 0);
+          managerDetailStatus.textContent = payload.calls.configured ? '' : 'Для менеджера не настроен внутренний номер АТС';
+          managerDetailContent.classList.remove('hidden');
+        } catch (error) {
+          managerDetailStatus.className = 'manager-detail-status error';
+          managerDetailStatus.textContent = error.message;
+        }
+      }
+
+      managerDetailBack.addEventListener('click', closeManagerDetail);
+
       function renderPresence(payload) {
         presenceList.replaceChildren();
         const managers = payload.managers || [];
@@ -567,12 +687,16 @@
           presenceList.append(empty); return;
         }
         managers.forEach(manager => {
-          const item = document.createElement('div'); item.className = `presence-item ${manager.status}`;
+          const item = document.createElement('button'); item.type = 'button'; item.className = `presence-item ${manager.status}`;
+          item.setAttribute('aria-label', `Открыть статистику: ${manager.name}`);
           const dot = document.createElement('i'); dot.className = 'presence-dot';
           const name = document.createElement('span'); name.className = 'presence-name'; name.textContent = manager.name;
           const label = document.createElement('small'); label.className = 'presence-label';
           label.textContent = presenceLabels[manager.status] || presenceLabels.unknown;
-          item.append(dot, name, label); presenceList.append(item);
+          const arrow = document.createElement('span'); arrow.className = 'presence-arrow'; arrow.textContent = '›';
+          item.append(dot, name, label, arrow);
+          item.addEventListener('click', () => openManagerDetail(manager));
+          presenceList.append(item);
         });
         presenceUpdated.textContent = payload.checked_at
           ? `проверено ${new Date(payload.checked_at).toLocaleTimeString('ru-RU', {hour: '2-digit', minute: '2-digit'})}`

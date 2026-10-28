@@ -191,16 +191,39 @@ class MiniAppReportTests(unittest.TestCase):
         self.assertIn("window.setInterval(loadPresence, 60000)", html)
 
     def test_presence_payload_normalizes_statuses(self):
-        payload = miniapp._presence_payload([
-            {
-                "id": 1, "full_name": "Анна", "presence_status": "working",
-                "presence_checked_at": "2026-10-16T10:00:00+00:00",
-            },
-            {"id": 2, "full_name": "Борис", "presence_status": "unexpected"},
-        ])
+        with patch("app.miniapp._manager_bitrix_map", return_value={"анна": 42}):
+            payload = miniapp._presence_payload([
+                {
+                    "id": 1, "full_name": "Анна", "presence_status": "working",
+                    "presence_checked_at": "2026-10-16T10:00:00+00:00",
+                },
+                {"id": 2, "full_name": "Борис", "presence_status": "unexpected"},
+            ])
         self.assertEqual(payload["managers"][0]["status"], "working")
+        self.assertEqual(payload["managers"][0]["bitrix_id"], 42)
         self.assertEqual(payload["managers"][1]["status"], "unknown")
         self.assertEqual(payload["checked_at"], "2026-10-16T10:00:00+00:00")
+
+    def test_manager_name_key_is_case_and_punctuation_insensitive(self):
+        self.assertEqual(
+            miniapp._manager_name_key("Евгений Гринёв"),
+            miniapp._manager_name_key("евгений-гринев"),
+        )
+
+    def test_manager_bitrix_map_uses_access_registry_and_links(self):
+        with (
+            patch("app.miniapp.store.list_planner_access", return_value=[{
+                "display_name": "Евгений Гринёв", "bitrix_user_id": "50",
+                "role": "manager", "active": 1,
+            }]),
+            patch("app.miniapp.store.list_links", return_value=[{
+                "bitrix_name": "Яна Азизова", "bitrix_user_id": "110",
+            }]),
+            patch("app.miniapp.store.rows", return_value=[]),
+        ):
+            result = miniapp._manager_bitrix_map()
+        self.assertEqual(result["евгенийгринев"], 50)
+        self.assertEqual(result["янаазизова"], 110)
 
 
 class MiniAppReportJobTests(unittest.IsolatedAsyncioTestCase):
@@ -235,6 +258,44 @@ class MiniAppReportJobTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(response["status"], "done")
         self.assertEqual(response["progress"], 100)
         self.assertEqual(response["result"], expected)
+
+
+class MiniAppManagerStatsTests(unittest.IsolatedAsyncioTestCase):
+    async def test_returns_leads_and_calls_for_selected_manager(self):
+        crm = SimpleNamespace(
+            call_statistics=lambda *_: _async_value({
+                "configured": True, "total": 7, "outbound": 6, "answered": 5,
+                "long_calls": 2, "duration_seconds": 900,
+            }),
+            processed_leads=lambda *_: _async_value({"processed": 4, "stages": {"Квалифицирован": 4}}),
+        )
+        presence = {
+            "managers": [{"bitrix_id": 50, "name": "Евгений Гринёв", "status": "working"}],
+        }
+        miniapp._manager_stats_cache.clear()
+        with (
+            patch("app.miniapp._authorized_user", return_value=TEST_USER_ID),
+            patch("app.miniapp._allowed_manager_ids", return_value={50}),
+            patch("app.miniapp._manager_presence_payload", return_value=presence),
+            patch("app.miniapp.PlannerCRM", return_value=crm),
+        ):
+            result = await miniapp.mini_app_manager_stats(None, 50, date(2026, 10, 28))
+        self.assertEqual(result["manager"]["name"], "Евгений Гринёв")
+        self.assertEqual(result["leads"]["processed"], 4)
+        self.assertEqual(result["calls"]["duration_seconds"], 900)
+
+    async def test_rejects_manager_outside_sales_registry(self):
+        with (
+            patch("app.miniapp._authorized_user", return_value=TEST_USER_ID),
+            patch("app.miniapp._allowed_manager_ids", return_value={50}),
+        ):
+            with self.assertRaises(HTTPException) as ctx:
+                await miniapp.mini_app_manager_stats(None, 999, date(2026, 10, 28))
+        self.assertEqual(ctx.exception.status_code, 404)
+
+
+async def _async_value(value):
+    return value
 
 
 if __name__ == "__main__":

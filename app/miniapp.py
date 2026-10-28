@@ -6,11 +6,13 @@ import hashlib
 import hmac
 import json
 import logging
+import re
 import time
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 from urllib.parse import parse_qsl
 from uuid import uuid4
+from zoneinfo import ZoneInfo
 
 import httpx
 from fastapi import APIRouter, HTTPException, Request, status
@@ -25,6 +27,8 @@ from app.task_reports import build_task_workbook, collect_task_report
 from app.standard_exports import build_standard_sales_workbook, collect_standard_sales_export
 from app.telephony_exports import build_telephony_workbook, collect_telephony_export
 from app import planner_access
+from app import store
+from app.manager_planner.integrations import PlannerCRM
 
 router = APIRouter()
 logger = logging.getLogger(__name__)
@@ -44,6 +48,7 @@ _worktime_cache: dict[tuple[date, date], tuple[float, dict]] = {}
 _task_cache: dict[tuple[date, date], tuple[float, dict]] = {}
 _sales_export_cache: dict[tuple[date, date], tuple[float, dict]] = {}
 _telephony_export_cache: dict[tuple[date, date], tuple[float, dict]] = {}
+_manager_stats_cache: dict[tuple[int, date], tuple[float, dict]] = {}
 
 
 def validate_init_data(init_data: str, bot_token: str, *, now: int | None = None) -> dict:
@@ -374,16 +379,45 @@ async def mini_app_telephony_excel(request: Request, start: date, end: date) -> 
     )
 
 
+def _manager_name_key(value: object) -> str:
+    return re.sub(r"[^a-zа-я0-9]", "", str(value or "").casefold().replace("ё", "е"))
+
+
+def _manager_bitrix_map() -> dict[str, int]:
+    """Join presence names to stable Bitrix IDs without exposing manager logins."""
+    result: dict[str, int] = {}
+    identities = store.list_planner_access()
+    for item in identities:
+        bitrix_id = str(item.get("bitrix_user_id") or "")
+        if item.get("role") == "manager" and item.get("active") and bitrix_id.isdigit():
+            result[_manager_name_key(item.get("display_name"))] = int(bitrix_id)
+    for item in store.list_links():
+        bitrix_id = str(item.get("bitrix_user_id") or "")
+        if bitrix_id.isdigit():
+            result.setdefault(_manager_name_key(item.get("bitrix_name")), int(bitrix_id))
+    for item in store.rows(
+        """SELECT DISTINCT processed_by_id,processed_by_name FROM crm_items
+           WHERE processed_by_id IS NOT NULL AND processed_by_name IS NOT NULL"""
+    ):
+        bitrix_id = str(item.get("processed_by_id") or "")
+        if bitrix_id.isdigit():
+            result.setdefault(_manager_name_key(item.get("processed_by_name")), int(bitrix_id))
+    return {key: value for key, value in result.items() if key}
+
+
 def _presence_payload(items: list[dict]) -> dict:
     allowed_statuses = {"working", "break", "offline", "unknown"}
+    bitrix_ids = _manager_bitrix_map()
     managers = []
     for item in items:
         presence_status = str(item.get("presence_status") or "unknown")
         if presence_status not in allowed_statuses:
             presence_status = "unknown"
+        name = str(item.get("full_name") or "Менеджер")
         managers.append({
             "id": item.get("id"),
-            "name": str(item.get("full_name") or "Менеджер"),
+            "name": name,
+            "bitrix_id": bitrix_ids.get(_manager_name_key(name)),
             "status": presence_status,
             "changed_at": item.get("presence_changed_at"),
             "checked_at": item.get("presence_checked_at"),
@@ -426,6 +460,57 @@ async def _manager_presence_payload() -> dict:
 async def mini_app_manager_presence(request: Request) -> dict:
     _authorized_user(request)
     return await _manager_presence_payload()
+
+
+def _allowed_manager_ids() -> set[int]:
+    return set(_manager_bitrix_map().values())
+
+
+@router.get("/api/miniapp/managers/{bitrix_user_id}/stats")
+async def mini_app_manager_stats(
+    request: Request, bitrix_user_id: int, day: date | None = None,
+) -> dict:
+    _authorized_user(request)
+    if bitrix_user_id not in _allowed_manager_ids():
+        raise HTTPException(status_code=404, detail="Менеджер не найден")
+    selected_day = day or datetime.now(ZoneInfo("Europe/Moscow")).date()
+    key = (bitrix_user_id, selected_day)
+    cached = _manager_stats_cache.get(key)
+    if cached and time.monotonic() - cached[0] < PRESENCE_CACHE_SECONDS:
+        return cached[1]
+
+    presence = await _manager_presence_payload()
+    manager = next(
+        (item for item in presence.get("managers", []) if item.get("bitrix_id") == bitrix_user_id),
+        None,
+    )
+    if manager is None:
+        name = next(
+            (
+                item.get("display_name") for item in store.list_planner_access()
+                if str(item.get("bitrix_user_id") or "") == str(bitrix_user_id)
+            ),
+            f"Менеджер #{bitrix_user_id}",
+        )
+        manager = {"name": name, "status": "unknown"}
+
+    crm = PlannerCRM()
+    calls, leads = await asyncio.gather(
+        crm.call_statistics(bitrix_user_id, selected_day.isoformat()),
+        crm.processed_leads(bitrix_user_id, selected_day.isoformat()),
+    )
+    result = {
+        "day": selected_day.isoformat(),
+        "manager": {
+            "bitrix_id": bitrix_user_id,
+            "name": manager["name"],
+            "status": manager.get("status", "unknown"),
+        },
+        "leads": leads,
+        "calls": calls,
+    }
+    _manager_stats_cache[key] = (time.monotonic(), result)
+    return result
 
 
 @router.post("/api/miniapp/report/jobs")
