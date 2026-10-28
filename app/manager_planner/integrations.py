@@ -139,6 +139,12 @@ class PlannerCRM:
         """Count each lead once, on its first exit from the unprocessed stage."""
         timezone = ZoneInfo(get_settings().daily_stats_timezone)
         selected_day = date.fromisoformat(day)
+        statuses = await self.client.get_lead_statuses()
+        stage_names = {
+            str(item.get("STATUS_ID") or ""): str(item.get("NAME") or "")
+            for item in statuses
+            if item.get("STATUS_ID") and item.get("NAME")
+        }
         rows = store.rows(
             """SELECT entity_id,current_stage_id,current_stage_name,processed_at
                FROM crm_items
@@ -152,7 +158,8 @@ class PlannerCRM:
                 selected.append(row)
         stages: dict[str, int] = {}
         for row in selected:
-            stage = str(row.get("current_stage_name") or row.get("current_stage_id") or "Без стадии")
+            stage_id = str(row.get("current_stage_id") or "")
+            stage = stage_names.get(stage_id) or str(row.get("current_stage_name") or "Без стадии")
             stages[stage] = stages.get(stage, 0) + 1
         return {"processed": len(selected), "stages": stages}
 

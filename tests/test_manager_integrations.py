@@ -22,6 +22,7 @@ class PlannerCRMTests(unittest.IsolatedAsyncioTestCase):
         self.store_patch = patch('app.store.get_settings', return_value=self.settings)
         self.settings_patch.start(); self.store_patch.start()
         self.client = AsyncMock()
+        self.client.get_lead_statuses.return_value = []
         self.crm = PlannerCRM(self.client)
 
     async def asyncTearDown(self):
@@ -73,6 +74,10 @@ class PlannerCRMTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([item['amount'] for item in result['pipelines']], [1000.0, 2500.0])
 
     async def test_processed_leads_are_scoped_by_manager_and_moscow_day(self):
+        self.client.get_lead_statuses.return_value = [
+            {"STATUS_ID": "IN_PROCESS", "NAME": "В работе"},
+            {"STATUS_ID": "JUNK", "NAME": "Мусор"},
+        ]
         store.execute(
             """INSERT INTO crm_items(
                entity_type,entity_id,created_date,current_stage_id,current_stage_name,
@@ -93,6 +98,22 @@ class PlannerCRMTests(unittest.IsolatedAsyncioTestCase):
         )
         result = await self.crm.processed_leads(110, '2026-10-21')
         self.assertEqual(result, {'processed': 1, 'stages': {'В работе': 1}})
+
+    async def test_processed_leads_replace_stored_stage_id_with_bitrix_name(self):
+        self.client.get_lead_statuses.return_value = [
+            {"STATUS_ID": "UC_9HGM2H", "NAME": "Недозвон"},
+        ]
+        store.execute(
+            """INSERT INTO crm_items(
+               entity_type,entity_id,created_date,current_stage_id,current_stage_name,
+               current_assignee_id,processed_at,processed_by_id,first_seen_at,updated_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?)""",
+            ('lead', '3', '2026-10-21', 'UC_9HGM2H', 'UC_9HGM2H', '110',
+             '2026-10-21T12:00:00+03:00', '110', '2026-10-21T09:00:00+03:00',
+             '2026-10-21T12:00:00+03:00'),
+        )
+        result = await self.crm.processed_leads(110, '2026-10-21')
+        self.assertEqual(result['stages'], {'Недозвон': 1})
 
 
 if __name__ == '__main__':
