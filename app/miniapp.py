@@ -395,13 +395,6 @@ def _manager_bitrix_map() -> dict[str, int]:
         bitrix_id = str(item.get("bitrix_user_id") or "")
         if bitrix_id.isdigit():
             result.setdefault(_manager_name_key(item.get("bitrix_name")), int(bitrix_id))
-    for item in store.rows(
-        """SELECT DISTINCT processed_by_id,processed_by_name FROM crm_items
-           WHERE processed_by_id IS NOT NULL AND processed_by_name IS NOT NULL"""
-    ):
-        bitrix_id = str(item.get("processed_by_id") or "")
-        if bitrix_id.isdigit():
-            result.setdefault(_manager_name_key(item.get("processed_by_name")), int(bitrix_id))
     return {key: value for key, value in result.items() if key}
 
 

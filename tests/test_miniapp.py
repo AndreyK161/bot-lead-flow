@@ -219,7 +219,6 @@ class MiniAppReportTests(unittest.TestCase):
             patch("app.miniapp.store.list_links", return_value=[{
                 "bitrix_name": "Яна Азизова", "bitrix_user_id": "110",
             }]),
-            patch("app.miniapp.store.rows", return_value=[]),
         ):
             result = miniapp._manager_bitrix_map()
         self.assertEqual(result["евгенийгринев"], 50)
