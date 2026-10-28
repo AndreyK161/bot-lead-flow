@@ -12,6 +12,7 @@ const clock = (seconds: number) => `${Math.floor(seconds / 3600).toString().padS
 
 function Icon({ name, size = 20 }: { name: string; size?: number }) {
   const paths: Record<string, ReactNode> = {
+    home: <><path d="M3 11 12 3l9 8"/><path d="M5 10v10h14V10M9 20v-6h6v6"/></>,
     plan: <><rect x="4" y="5" width="16" height="16" rx="4"/><path d="M8 3v4m8-4v4M4 11h16m-12 5h3"/></>,
     tasks: <><path d="m4 6 2 2 4-4m-6 9 2 2 4-4m4-5h6m-6 7h6M4 20h16"/></>,
     results: <><path d="M5 20v-6m7 6V9m7 11V4"/></>,
@@ -32,7 +33,7 @@ type Modal = { type: 'task' | 'goal' | 'move'; task?: Task } | { type: 'employee
 
 export default function App({ client = api, demo = false }: { client?: Client; demo?: boolean }) {
   const [me, setMe] = useState<Me>();
-  const [section, setSection] = useState('plan');
+  const [section, setSection] = useState('home');
   const [day, setDay] = useState('');
   const [employeeId, setEmployeeId] = useState<number>();
   const [employees, setEmployees] = useState<Employee[]>([]);
@@ -132,6 +133,7 @@ export default function App({ client = api, demo = false }: { client?: Client; d
   useEffect(() => {
     if (!me) return;
     setLoading(true); setPlan(undefined); setError('');
+    setCrm(undefined);
     selectedPlanId.current = undefined;
     setAudit([]); setShowAudit(false); setModal(undefined);
     resourceVersions.current.history = (resourceVersions.current.history || 0) + 1;
@@ -179,7 +181,7 @@ export default function App({ client = api, demo = false }: { client?: Client; d
   const selectedTasks = tasks.filter(t => filter === 'all' || t.status === filter);
   const elapsed = (t: Task) => t.actual_seconds + (t.timer_started ? Math.max(0, Math.floor((now + offset) / 1000) - t.timer_started) : 0);
   const pending = requests.filter(r => r.status === 'pending').length;
-  const tabs = supervisor ? [['people', 'Менеджеры'], ['plan', 'Планы'], ['results', 'Прогресс'], ['requests', 'Запросы'], ['history', 'История'], ['reports', 'Отчёты']] : [['plan', 'Мой план дня'], ['tasks', 'Задачи'], ['results', 'Мои результаты'], ['history', 'История планов']];
+  const tabs = supervisor ? [['home', 'Обзор отдела'], ['people', 'Сотрудники'], ['plan', 'Планы'], ['results', 'Прогресс'], ['requests', 'Согласования'], ['history', 'История'], ['reports', 'Отчёты']] : [['home', 'Главная'], ['plan', 'Мой план'], ['tasks', 'Задачи'], ['results', 'Мои результаты'], ['history', 'История']];
 
   if (!me) return <div className="welcome"><div className="brand-mark"><Icon name="plan" size={32}/></div><p className="eyebrow">ОТДЕЛ ПРОДАЖ</p><h1>Хороший день<br/>начинается с плана.</h1><p>{loading ? 'Открываем ваше рабочее пространство…' : error}</p>{!loading && <button onClick={() => window.location.reload()}>Попробовать снова</button>}<span className="muted">Планы, задачи и результаты — в одном месте</span></div>;
 
@@ -189,7 +191,7 @@ export default function App({ client = api, demo = false }: { client?: Client; d
     <div><span>В работе</span><strong>{Math.floor(tasks.reduce((s, t) => s + elapsed(t), 0) / 60)}<small> мин</small></strong><span>фактически</span></div>
   </div>;
   const rubles = (value: number) => new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(value);
-  const renderCrm = () => crm && <section className="card crm-summary"><div className="section-heading"><h3>Bitrix24 и звонки</h3><span className="badge">Только чтение</span></div>{!crm.available ? <p className="notice">{crm.message}</p> : <div className="crm-grid"><div><span>Исходящие звонки</span><strong>{crm.calls?.outbound || 0}</strong><small>Дозвоны: {crm.calls?.answered || 0} · от 3 минут: {crm.calls?.long_calls || 0}</small>{crm.calls && !crm.calls.configured && <small>Нет привязки номера МегаФона</small>}</div>{(crm.pipelines || []).map(p => <div key={p.category_id}><span>{p.category_id === 0 ? 'Сделки · Продажи' : `Сделки · Категория ${p.category_id}`}</span><strong>{p.total}</strong><small>Сумма: {rubles(p.amount)}</small></div>)}</div>}</section>;
+  const renderCrm = () => crm && <section className="card crm-summary"><div className="section-heading"><h3>Обработка лидов и звонки</h3><span className="badge">Только чтение</span></div>{!crm.available ? <p className="notice">{crm.message}</p> : <div className="crm-grid"><div><span>Обработано лидов</span><strong>{crm.leads?.processed || 0}</strong><small>{crm.leads && Object.entries(crm.leads.stages).length ? Object.entries(crm.leads.stages).map(([stage, count]) => `${stage}: ${count}`).join(' · ') : 'Первый выход из стадии «Не обработан»'}</small></div><div><span>Звонков за день</span><strong>{crm.calls?.total || 0}</strong><small>Исходящих: {crm.calls?.outbound || 0} · дозвоны: {crm.calls?.answered || 0} · от 3 минут: {crm.calls?.long_calls || 0}</small>{crm.calls && !crm.calls.configured && <small>Нет привязки номера МегаФона</small>}</div><div><span>Общая длительность</span><strong>{minutes(crm.calls?.duration_seconds || 0)}</strong><small>Сумма состоявшихся исходящих звонков</small></div>{(crm.pipelines || []).map(p => <div key={p.category_id}><span>{p.category_id === 0 ? 'Сделки · Продажи' : `Сделки · Категория ${p.category_id}`}</span><strong>{p.total}</strong><small>Сумма: {rubles(p.amount)}</small></div>)}</div>}</section>;
   const renderHistory = () => <section className="card audit"><h3>История изменений</h3>{audit.length === 0 && <p className="muted">{loadErrors.history ? 'История не загружена. Повторите загрузку выше.' : 'Изменений пока нет.'}</p>}{audit.map(a => <article key={a.id}>
     <div><strong>{actionName[a.action] || 'Изменение'}</strong><small>{a.actor_name} · {new Date(a.created_at * 1000).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' })}</small></div>
     {a.entity === 'task' && <p>{String(a.after_json?.title || a.before_json?.title || `Задача №${a.entity_id}`)}</p>}
@@ -202,23 +204,46 @@ export default function App({ client = api, demo = false }: { client?: Client; d
     {p.initial_snapshot && <details><summary>Первоначальный утверждённый план</summary>{p.initial_snapshot.tasks.map(t => <p key={t.id}>{t.title} · {t.planned_minutes} мин{t.target != null ? ` · цель ${t.target}` : ''}</p>)}</details>}
   </section>;
 
+  const todayPlans = plans.filter(p => p.day === me.today);
+  const dashboardPlans = supervisor ? todayPlans : plan ? [plan] : [];
+  const dashboardTotal = dashboardPlans.reduce((sum, item) => sum + item.summary.total, 0);
+  const dashboardDone = dashboardPlans.reduce((sum, item) => sum + item.summary.done, 0);
+  const dashboardMinutes = dashboardPlans.reduce((sum, item) => sum + item.summary.planned_minutes, 0);
+  const dashboardSeconds = dashboardPlans.reduce((sum, item) => sum + item.summary.actual_seconds, 0);
+  const activeTask = tasks.find(task => task.timer_started !== null) || tasks.find(task => task.status === 'in_progress');
+  const dashboardPercent = dashboardTotal ? Math.round(dashboardDone / dashboardTotal * 100) : 0;
+  const renderDashboard = () => <>
+    <div className="stats-grid">
+      <article className="stat card"><div className="stat-top"><span>{supervisor ? 'Сотрудники с планом' : 'Задачи на сегодня'}</span><span className="icon-tile blue"><Icon name={supervisor ? 'people' : 'tasks'}/></span></div><strong className="stat-value">{supervisor ? todayPlans.length : dashboardTotal}</strong><small>{supervisor ? `из ${employees.filter(e => e.active).length} активных менеджеров` : 'в текущем плане'}</small></article>
+      <article className="stat card"><div className="stat-top"><span>Завершено задач</span><span className="icon-tile green"><Icon name="check"/></span></div><strong className="stat-value">{dashboardDone} <small>/ {dashboardTotal}</small></strong><small>{dashboardPercent}% выполнения</small></article>
+      <article className="stat card"><div className="stat-top"><span>Плановое время</span><span className="icon-tile orange"><Icon name="plan"/></span></div><strong className="stat-value">{dashboardMinutes} <small>мин</small></strong><small>на выбранный рабочий день</small></article>
+      <article className="stat card"><div className="stat-top"><span>Фактическое время</span><span className="icon-tile violet"><Icon name="history"/></span></div><strong className="stat-value">{Math.floor(dashboardSeconds / 3600)}:{String(Math.floor(dashboardSeconds % 3600 / 60)).padStart(2, '0')}</strong><small>по серверному учёту задач</small></article>
+    </div>
+    {supervisor ? <section className="card team-overview"><div className="section-heading compact"><div><h2>Команда сегодня</h2><p className="muted">Реальные планы отдела на {dateLabel(me.today)}</p></div><button className="text-button" onClick={() => setSection('people')}>Все сотрудники →</button></div>
+      <div className="employee-grid">{todayPlans.map(item => <article className="employee-card" key={item.id}><div className="employee-top"><span className="avatar">{item.employee_name[0]}</span><div><h3>{item.employee_name}</h3><small>{item.summary.done} из {item.summary.total} задач</small></div><span className={`badge ${item.status}`}>{statusName[item.status]}</span></div><div className="employee-numbers"><div><strong>{item.summary.done} / {item.summary.total}</strong><small>задач завершено</small></div><div><strong>{Math.floor(item.summary.actual_seconds / 60)} мин</strong><small>фактическое время</small></div></div><progress max={item.summary.total || 1} value={item.summary.done}/><button className="text-button" onClick={() => selectPlan(item)}>Открыть план →</button></article>)}</div>
+      {!todayPlans.length && <div className="empty small"><p>На сегодня планы ещё не созданы.</p></div>}
+    </section> : <div className="dashboard-grid"><section className="card current-card"><div className="section-heading compact"><h2>Текущая задача</h2>{activeTask ? <span className="live-label"><i/>В работе</span> : <span className="badge">Нет активной</span>}</div>{activeTask ? <><p className="eyebrow">ИЗ ПЛАНА НА СЕГОДНЯ</p><h3>{activeTask.title}</h3><p className="muted">{activeTask.description || kindName[activeTask.kind]}</p><div className="current-main"><div className="timer">{clock(elapsed(activeTask))}<small>фактическое время</small></div>{activeTask.kind === 'quantitative' && <div className="current-target"><strong>{activeTask.actual_value}<span> / {activeTask.target}</span></strong><small>факт / цель</small></div>}</div><div className="current-actions"><button className="button" disabled={busy} onClick={() => act(`/tasks/${activeTask.id}/timer`, 'POST', { action: activeTask.timer_started ? 'pause' : 'start' }, activeTask.timer_started ? 'Таймер на паузе' : 'Таймер запущен')}><Icon name={activeTask.timer_started ? 'pause' : 'play'}/>{activeTask.timer_started ? 'Пауза' : 'Начать'}</button><button className="button secondary" onClick={() => setSection('tasks')}>К задаче →</button></div></> : <div className="empty small"><p>{plan ? 'Запустите задачу из плана, когда приступите к работе.' : 'Создайте план на сегодня, чтобы начать рабочий день.'}</p><button className="text-button" onClick={() => setSection('plan')}>Открыть план →</button></div>}</section>
+      <section className="card plan-card"><div className="section-heading compact"><h2>План рабочего дня</h2>{plan && <span className={`badge ${plan.status}`}>{statusName[plan.status]}</span>}</div><p className="muted">{plan ? `${plan.employee_name} · ${dateLabel(plan.day)}` : dateLabel(me.today)}</p><div className="plan-number">{dashboardPercent}<span>%</span><small>задач завершено</small></div><progress max={100} value={dashboardPercent}/><div className="plan-breakdown"><span><i className="legend green"/>Завершено <b>{dashboardDone}</b></span><span><i className="legend blue"/>Осталось <b>{Math.max(0, dashboardTotal - dashboardDone)}</b></span></div><div className="card-foot">План: {dashboardMinutes} мин <span>Факт: {minutes(dashboardSeconds)}</span></div></section></div>}
+    <section className="metrics-prompt"><span className="icon-tile blue"><Icon name="results"/></span><div><h3>{supervisor ? 'Все детали доступны в рабочих разделах' : 'Следующий шаг всегда перед глазами'}</h3><p>{supervisor ? 'Откройте сотрудника, планы или согласования.' : 'План, задачи, результаты и история используют реальные данные Lead Flow.'}</p></div><button className="text-button" onClick={() => setSection(supervisor ? 'people' : 'plan')}>Перейти →</button></section>
+  </>;
+
   return <div className="shell">
     {import.meta.env.DEV && demo && <div className="demo-banner">ДЕМОНСТРАЦИЯ · Пример интерфейса, данные вымышлены · <a href="/preview.html?role=manager">Менеджер</a> / <a href="/preview.html?role=supervisor">Руководитель</a></div>}
-    <header className="topbar"><div className="brand"><div className="brand-mark"><Icon name="plan"/></div><div><b>План дня</b><span>Отдел продаж</span></div></div><div className="profile"><div><b>{me.user.name}</b><span>{supervisor ? 'Руководитель' : 'Менеджер'}</span></div><div className="avatar">{me.user.name[0]}</div></div></header>
-    <div className="workspace"><nav aria-label="Разделы">{tabs.map(([key, title]) => <button key={key} className={section === key ? 'active' : ''} onClick={() => { setSection(key); setShowAudit(false); }}><Icon name={key === 'reports' ? 'results' : key}/><span>{title}</span>{key === 'requests' && pending > 0 && <em>{pending}</em>}</button>)}</nav>
-    <main>
+    <div className="workspace"><aside className="sidebar"><button className="brand" onClick={() => setSection('home')}><span className="brand-mark">П</span><span><b>План дня</b><small>РАБОЧЕЕ ПРОСТРАНСТВО</small></span></button><p className="nav-caption">{supervisor ? 'УПРАВЛЕНИЕ ОТДЕЛОМ' : 'ЛИЧНЫЙ КАБИНЕТ'}</p><nav aria-label="Разделы">{tabs.map(([key, title]) => <button key={key} className={section === key ? 'active' : ''} onClick={() => { setSection(key); setShowAudit(false); }}><Icon name={key === 'reports' ? 'results' : key}/><span>{title}</span>{key === 'requests' && pending > 0 && <em>{pending}</em>}</button>)}</nav><div className="sidebar-bottom"><span className="connection-dot"/>Lead Flow подключён<small>{me.crm.connected ? 'Bitrix24 и телефония доступны' : me.crm.message}</small></div><div className="profile"><div className="avatar">{me.user.name[0]}</div><div><b>{me.user.name}</b><span>{supervisor ? 'Руководитель' : 'Менеджер'}</span></div></div></aside>
+    <div className="main-shell"><header className="topbar"><span>Рабочее пространство <span className="crumb">/ {tabs.find(t => t[0] === section)?.[1]}</span></span><div><span className="top-date">{dateLabel(me.today)}</span><span className="avatar small">{me.user.name[0]}</span></div></header><main className="page-content">
       <div className="page-title"><div><p className="eyebrow">{supervisor ? 'КОМАНДА И РЕЗУЛЬТАТ' : 'РАБОЧЕЕ ПРОСТРАНСТВО'}</p><h1>{tabs.find(t => t[0] === section)?.[1]}</h1></div><button className="quiet" disabled={busy || loading} onClick={() => refresh().catch(e => setError(e.message))}>Обновить</button></div>
       {error && <div className="error" role="alert">{error}<button className="icon-button" aria-label="Закрыть ошибку" onClick={() => setError('')}><Icon name="close"/></button></div>}
       {Object.entries(loadErrors).map(([key, message]) => <div className="error" role="alert" key={key}><span>{({ employees: 'Сотрудники', plans: 'Планы', requests: 'Согласования', distributions: 'Уведомления', history: 'История', crm: 'Bitrix24 и звонки' } as Record<string, string>)[key]}: {message}</span><button className="secondary" onClick={() => void refresh(key)}>Повторить загрузку</button></div>)}
       {toast && <div className="toast" role="status"><Icon name="check"/>{toast}</div>}
 
-      {section === 'people' && supervisor ? <>
+      {section === 'home' ? renderDashboard() : section === 'people' && supervisor ? <>
         <section className="hero"><p className="eyebrow">ВМЕСТЕ К ЦЕЛИ</p><h2>У каждого — ясный план.<br/>У вас — общая картина.</h2><p>{employeesLoaded ? `${employees.filter(e => e.active).length} сотрудника в команде` : loadErrors.employees ? 'Сотрудники не загружены' : 'Загрузка сотрудников'}</p><button className="light" onClick={() => setModal({ type: 'employee' })}><Icon name="plus"/>Добавить сотрудника</button></section>
         <div className="section-heading"><h2>Команда</h2><span className="muted">{dateLabel(me.today)}</span></div>
         <div className="employee-grid">{employees.map(e => <section className="card employee" key={e.id}><div className="row"><div className="avatar">{e.name[0]}</div><div><h3>{e.name}</h3><span className="muted">{!e.active ? 'Доступ выключен' : e.telegram_id ? 'Менеджер' : 'Ожидает подключения Telegram'}</span></div></div><div className="actions"><button className="secondary" onClick={() => { setEmployeeId(e.id); setDay(me.today); setSection('plan'); }}>Открыть план <Icon name="arrow"/></button><button className="quiet" onClick={() => setModal({ type: 'employee', employee: e })}>Изменить</button></div></section>)}</div>
       </> : section === 'requests' ? loadErrors.requests ? <p className="notice">Согласования не загружены. Повторите загрузку выше.</p> : <Requests requests={requests} supervisor={!!supervisor} busy={busy} act={act}/> : <>
         <div className="toolbar">{supervisor && <label>Сотрудник<select aria-label="Сотрудник" value={employeeId || ''} onChange={e => setEmployeeId(e.target.value ? Number(e.target.value) : undefined)}><option value="">Все менеджеры</option>{employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}</select></label>}<label>Дата · Москва<input aria-label="Дата плана" type="date" value={day} onChange={e => { if (e.target.value) setDay(e.target.value); }}/></label>{day !== me.today && <button className="quiet" onClick={() => setDay(me.today)}>Сегодня</button>}</div>
         {distributions.filter(d => d.status !== 'imported').map(d => <aside className="notice" key={`${d.id}-${d.employee_id || 'system'}`}><strong>Требует рассмотрения</strong><p>{d.employee_name}{d.day && ` · ${dateLabel(d.day)}`}</p><p>{d.reason === 'plan_already_confirmed_or_closed' ? 'План уже подтверждён или день закрыт. Новое распределение сохранено отдельно, план не изменён.' : d.reason === 'import_retry' ? 'Запись не импортирована. Система повторяет попытки.' : 'Нужно проверить активность и привязку сотрудников. Распределение не применено автоматически.'}</p>{d.count !== null && <p>Назначено: {d.count} · Даты: {d.dates.map(dateLabel).join(', ')}</p>}</aside>)}
+        {employeeId && ['plan', 'tasks', 'results'].includes(section) && renderCrm()}
         {loading ? <div className="empty"><div className="spinner"/><p>Загружаем планы…</p></div> : loadErrors.plans ? <p className="notice">Планы не удалось загрузить. Повторите загрузку выше; остальные разделы доступны.</p> : section === 'history' || section === 'reports' || (supervisor && !employeeId) ? <>
           <div className="section-heading"><h2>{section === 'history' ? 'Ваши рабочие дни' : section === 'reports' ? 'Закрытые дни' : 'Планы команды'}</h2><span className="muted">{section === 'history' || section === 'reports' ? 'Последние 366 планов' : dateLabel(day)}</span></div>
           <div className="plan-list">{plans.filter(p => section === 'reports' ? p.status === 'closed' : section === 'history' || p.day === day).map(p => <button className="card plan-row" key={p.id} onClick={() => selectPlan(p, section === 'reports' ? 'results' : 'plan')}><div><b>{dateLabel(p.day)}</b><span>{p.employee_name}</span></div><div><span className={`badge ${p.status}`}>{statusName[p.status]}</span><small>{p.summary.done} из {p.summary.total} задач · {p.summary.planned_minutes} мин</small></div><Icon name="arrow"/></button>)}</div>
@@ -226,7 +251,6 @@ export default function App({ client = api, demo = false }: { client?: Client; d
         </> : !plan ? <section className="card empty"><div className="empty-symbol"><Icon name="plan" size={38}/></div><h2>Дадим этому дню направление</h2><p>{dateLabel(day)}{supervisor && ` · ${employees.find(e => e.id === employeeId)?.name}`}</p><p className="muted">Начните с чистого листа или возьмите за основу<br/>предыдущий рабочий день.</p><div className="actions"><button disabled={busy} onClick={() => createPlan(false)}><Icon name="plus"/>Создать план</button><button disabled={busy} className="secondary" onClick={() => createPlan(true)}>Из предыдущего дня</button></div></section> : <>
           <div className="plan-heading"><div><h2>{dateLabel(day)}</h2><p>{plan.employee_name} <span className={`badge ${plan.status}`}>{statusName[plan.status]}</span></p></div>{plan.status !== 'closed' && section !== 'results' && <button disabled={busy} onClick={() => setModal({ type: 'task' })}><Icon name="plus"/>Новая задача</button>}</div>
           {renderSummary()}
-          {renderCrm()}
           {section === 'results' || plan.status === 'closed' ? renderReport(plan) : <>
             <div className="section-heading"><h2>Фокус на сегодня</h2><span className="muted">{tasks.length} задач</span></div>
             <div className="filters" aria-label="Фильтр задач">{[['all', 'Все'], ['todo', 'К выполнению'], ['in_progress', 'В работе'], ['done', 'Готово'], ['moved', 'Перенесено']].map(([key, title]) => <button className={filter === key ? 'selected' : ''} key={key} onClick={() => setFilter(key)}>{title}</button>)}</div>
@@ -255,7 +279,7 @@ export default function App({ client = api, demo = false }: { client?: Client; d
         {!supervisor && (section === 'results' || section === 'plan') && requests.length > 0 && <Requests requests={requests} supervisor={false} busy={busy} act={act}/>}
       </>}
       <footer><span className="connection-dot"/>Рабочий день {me.workday?.start || '10:00'}–{me.workday?.end || '19:00'} <span>·</span> Время по Москве<p>{me.crm.message}</p></footer>
-    </main></div>
+    </main></div></div>
     {modal && <ModalForm modal={modal} plan={plan} supervisor={!!supervisor} busy={busy} error={error} onClose={() => { if (!busy) { setModal(undefined); setError(''); } }} onSubmit={act}/>}
   </div>;
 }

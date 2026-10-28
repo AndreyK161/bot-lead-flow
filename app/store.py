@@ -125,6 +125,8 @@ def _schema(*, postgres: bool) -> str:
             ON bitrix_events(status,received_at);
         CREATE INDEX IF NOT EXISTS idx_crm_item_events_entity_time
             ON crm_item_events(entity_type,entity_id,occurred_at);
+        CREATE INDEX IF NOT EXISTS idx_crm_items_processed
+            ON crm_items(entity_type,processed_by_id,processed_at);
         CREATE TABLE IF NOT EXISTS daily_report_deliveries (
             report_date TEXT NOT NULL, chat_id TEXT NOT NULL, message_id BIGINT,
             PRIMARY KEY (report_date, chat_id)

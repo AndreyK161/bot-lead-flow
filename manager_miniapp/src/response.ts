@@ -28,8 +28,9 @@ const notice = (v: unknown) => object(v) && text(v.id) && text(v.employee_name) 
 const time = (v: unknown) => text(v) && /^(?:[01]\d|2[0-3]):[0-5]\d$/.test(v as string);
 const workday = (v: unknown) => object(v) && time(v.start) && time(v.end) && text(v.timezone) && typeof v.reminders_enabled === 'boolean';
 const calls = (v: unknown) => object(v) && typeof v.configured === 'boolean' && ['total','outbound','answered','long_calls','duration_seconds'].every(k => number(v[k]));
+const leads = (v: unknown) => object(v) && number(v.processed) && object(v.stages) && Object.values(v.stages).every(number);
 const pipeline = (v: unknown) => object(v) && ['category_id','total','amount'].every(k => number(v[k])) && object(v.stages) && Object.values(v.stages).every(number);
-const crmSummary = (v: unknown) => object(v) && typeof v.available === 'boolean' && day(v.day) && optional(v.message,text) && optional(v.calls,calls) && optional(v.pipelines,x => list(x,pipeline));
+const crmSummary = (v: unknown) => object(v) && typeof v.available === 'boolean' && day(v.day) && optional(v.message,text) && optional(v.calls,calls) && optional(v.leads,leads) && optional(v.pipelines,x => list(x,pipeline));
 
 export function validateResponse(path: string, method: string, value: unknown): void {
   const route = path.split('?')[0];

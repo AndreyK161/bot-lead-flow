@@ -26,6 +26,7 @@ export interface Me { user: Employee; today: string; timezone: string; workday?:
 export interface CrmSummary {
   available: boolean; day: string; message?: string;
   calls?: { configured: boolean; total: number; outbound: number; answered: number; long_calls: number; duration_seconds: number };
+  leads?: { processed: number; stages: Record<string, number> };
   pipelines?: Array<{ category_id: number; total: number; amount: number; stages: Record<string, number> }>;
 }
 export interface TelegramApp {

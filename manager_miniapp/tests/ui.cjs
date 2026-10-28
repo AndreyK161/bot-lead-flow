@@ -9,7 +9,12 @@ const builtIndex = fs.readFileSync(path.join(root, '..', 'app', 'static', 'manag
 
 assert(source.includes('/crm/summary?employee_id='), 'CRM summary is not requested by the UI');
 assert(source.includes('Только чтение'), 'read-only CRM label is missing');
+assert(source.includes('Обработано лидов'), 'processed leads metric is missing');
+assert(source.includes('Общая длительность'), 'total call duration metric is missing');
+assert(source.includes('Обзор отдела'), 'desktop supervisor dashboard is missing');
+assert(source.includes('className="sidebar"'), 'desktop sidebar shell is missing');
 assert(response.includes("route === '/crm/summary'"), 'CRM response is not validated');
+assert(response.includes('optional(v.leads,leads)'), 'processed leads response is not validated');
 const asset = builtIndex.match(/src="(\/manager\/[^"]+\.js)"/);
 assert(asset, 'built JavaScript asset is missing');
 const relativeAsset = asset[1].replace(/^\/manager\//, '');

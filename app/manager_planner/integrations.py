@@ -35,6 +35,7 @@ class ExternalTask:
 class ReadOnlyCRM(Protocol):
     async def tasks(self, bitrix_user_id: int, day: str) -> list[ExternalTask]: ...
     async def call_statistics(self, bitrix_user_id: int, day: str, long_call_seconds: int = 180) -> dict: ...
+    async def processed_leads(self, bitrix_user_id: int, day: str) -> dict: ...
     async def deals(self, bitrix_user_id: int, category_id: int) -> list[dict]: ...
 
 
@@ -134,9 +135,31 @@ class PlannerCRM:
     async def deals(self, bitrix_user_id: int, category_id: int) -> list[dict]:
         return await self.client.get_user_deals(bitrix_user_id, category_id)
 
+    async def processed_leads(self, bitrix_user_id: int, day: str) -> dict:
+        """Count each lead once, on its first exit from the unprocessed stage."""
+        timezone = ZoneInfo(get_settings().daily_stats_timezone)
+        selected_day = date.fromisoformat(day)
+        rows = store.rows(
+            """SELECT entity_id,current_stage_id,current_stage_name,processed_at
+               FROM crm_items
+               WHERE entity_type='lead' AND processed_by_id=? AND processed_at IS NOT NULL""",
+            (str(bitrix_user_id),),
+        )
+        selected = []
+        for row in rows:
+            processed_at = _datetime(row.get("processed_at"))
+            if processed_at and processed_at.astimezone(timezone).date() == selected_day:
+                selected.append(row)
+        stages: dict[str, int] = {}
+        for row in selected:
+            stage = str(row.get("current_stage_name") or row.get("current_stage_id") or "Без стадии")
+            stages[stage] = stages.get(stage, 0) + 1
+        return {"processed": len(selected), "stages": stages}
+
     async def summary(self, bitrix_user_id: int, day: str) -> dict:
-        calls, category_zero, category_two = await asyncio.gather(
+        calls, leads, category_zero, category_two = await asyncio.gather(
             self.call_statistics(bitrix_user_id, day),
+            self.processed_leads(bitrix_user_id, day),
             self.deals(bitrix_user_id, 0),
             self.deals(bitrix_user_id, 2),
         )
@@ -157,6 +180,7 @@ class PlannerCRM:
             "available": True,
             "day": day,
             "calls": calls,
+            "leads": leads,
             "pipelines": [pipeline(0, category_zero), pipeline(2, category_two)],
         }
 

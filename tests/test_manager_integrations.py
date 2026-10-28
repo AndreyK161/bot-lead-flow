@@ -72,6 +72,28 @@ class PlannerCRMTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual([item['category_id'] for item in result['pipelines']], [0, 2])
         self.assertEqual([item['amount'] for item in result['pipelines']], [1000.0, 2500.0])
 
+    async def test_processed_leads_are_scoped_by_manager_and_moscow_day(self):
+        store.execute(
+            """INSERT INTO crm_items(
+               entity_type,entity_id,created_date,current_stage_id,current_stage_name,
+               current_assignee_id,processed_at,processed_by_id,first_seen_at,updated_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?)""",
+            ('lead', '1', '2026-10-21', 'IN_PROCESS', 'В работе', '110',
+             '2026-10-21T12:00:00+03:00', '110', '2026-10-21T09:00:00+03:00',
+             '2026-10-21T12:00:00+03:00'),
+        )
+        store.execute(
+            """INSERT INTO crm_items(
+               entity_type,entity_id,created_date,current_stage_id,current_stage_name,
+               current_assignee_id,processed_at,processed_by_id,first_seen_at,updated_at)
+               VALUES(?,?,?,?,?,?,?,?,?,?)""",
+            ('lead', '2', '2026-10-21', 'JUNK', 'Мусор', '50',
+             '2026-10-21T13:00:00+03:00', '50', '2026-10-21T10:00:00+03:00',
+             '2026-10-21T13:00:00+03:00'),
+        )
+        result = await self.crm.processed_leads(110, '2026-10-21')
+        self.assertEqual(result, {'processed': 1, 'stages': {'В работе': 1}})
+
 
 if __name__ == '__main__':
     unittest.main()
