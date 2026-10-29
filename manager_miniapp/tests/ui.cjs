@@ -5,6 +5,8 @@ const path = require('node:path');
 const root = path.resolve(__dirname, '..');
 const source = fs.readFileSync(path.join(root, 'src', 'App.tsx'), 'utf8');
 const response = fs.readFileSync(path.join(root, 'src', 'response.ts'), 'utf8');
+const api = fs.readFileSync(path.join(root, 'src', 'api.ts'), 'utf8');
+const main = fs.readFileSync(path.join(root, 'src', 'main.tsx'), 'utf8');
 const builtIndex = fs.readFileSync(path.join(root, '..', 'app', 'static', 'manager', 'index.html'), 'utf8');
 
 assert(source.includes('/crm/summary?employee_id='), 'CRM summary is not requested by the UI');
@@ -18,6 +20,9 @@ assert(source.includes("['calls', 'Обзвон']"), 'manager dialer navigation 
 assert(source.includes('/dialer/sessions'), 'dialer queue actions are missing');
 assert(source.includes('Клиент ответил'), 'dialer confirmation action is missing');
 assert(response.includes("route === '/dialer/session'"), 'dialer response is not validated');
+assert(api.includes("WEB_TOKEN_KEY = 'access_token'"), 'shared Lead Flow web token is missing');
+assert(api.includes("'/api/v1/auth/login'"), 'web login does not use Lead Flow auth');
+assert(main.includes('Рабочее пространство отдела продаж'), 'desktop web login is missing');
 assert(source.includes('Обзор отдела'), 'desktop supervisor dashboard is missing');
 assert(source.includes('className="sidebar"'), 'desktop sidebar shell is missing');
 assert(response.includes("route === '/crm/summary'"), 'CRM response is not validated');

@@ -20,11 +20,14 @@ services:
     env_file: .env
     environment:
       DATABASE_URL: postgresql://bot_lead_flow:${POSTGRES_PASSWORD}@postgres:5432/bot_lead_flow
+      LEADFLOW_WEB_AUTH_URL: ${LEADFLOW_WEB_AUTH_URL:-http://host.docker.internal:8031/api/v1/auth/me}
     depends_on:
       postgres:
         condition: service_healthy
     volumes:
       - ./data:/app/data
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
     ports:
       - "${APP_BIND:-127.0.0.1}:${APP_PORT:-8080}:8000"
 

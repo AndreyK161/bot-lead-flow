@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import logging
+import hashlib
 import sqlite3
 import time
 from datetime import date
@@ -11,6 +12,7 @@ from fastapi import Depends, FastAPI, Header, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
+import httpx
 
 from app.config import get_settings
 from app import dialer, planner_access as access_registry
@@ -25,6 +27,8 @@ logger = logging.getLogger(__name__)
 CRM_CACHE_SECONDS = 60
 _crm_cache: dict[tuple[int, str], tuple[float, dict]] = {}
 _performance_cache: dict[tuple[int, str, str], tuple[float, dict]] = {}
+_web_identity_cache: dict[str, tuple[float, dict]] = {}
+WEB_IDENTITY_CACHE_SECONDS = 15
 
 
 static_path = Path(__file__).resolve().parent.parent / "static" / "manager"
@@ -75,22 +79,72 @@ def create_app() -> FastAPI:
         )
         return response
 
-    def actor(authorization: str | None = Header(default=None)):
+    async def actor(authorization: str | None = Header(default=None)):
         settings = get_settings()
-        if not authorization or not authorization.startswith("tma "):
-            raise HTTPException(401, "Откройте приложение из Telegram.")
-        try:
-            telegram_id = validate_init_data(authorization[4:], settings.telegram_bot_token)
-        except InvalidInitData as exc:
-            raise HTTPException(401, str(exc)) from None
-        identity = access_registry.authorized_identity(telegram_id)
-        if identity is None:
-            raise HTTPException(403, "Доступ к Planner пока не открыт.")
-        user = store.actor(telegram_id)
-        if identity["role"] != "owner" and user["role"] != identity["role"]:
-            raise HTTPException(403, "Роль Planner не совпадает с перенесённой ролью.")
-        if identity["role"] == "manager" and str(user.get("bitrix_id") or "") != str(identity["bitrix_user_id"] or ""):
-            raise HTTPException(403, "Привязка менеджера к Bitrix не совпадает.")
+        if authorization and authorization.startswith("tma "):
+            try:
+                telegram_id = validate_init_data(authorization[4:], settings.telegram_bot_token)
+            except InvalidInitData as exc:
+                raise HTTPException(401, str(exc)) from None
+            identity = access_registry.authorized_identity(telegram_id)
+            if identity is None:
+                raise HTTPException(403, "Доступ к Planner пока не открыт.")
+            user = store.actor(telegram_id)
+            if identity["role"] != "owner" and user["role"] != identity["role"]:
+                raise HTTPException(403, "Роль Planner не совпадает с перенесённой ролью.")
+            if identity["role"] == "manager" and str(user.get("bitrix_id") or "") != str(identity["bitrix_user_id"] or ""):
+                raise HTTPException(403, "Привязка менеджера к Bitrix не совпадает.")
+            return user
+        if not authorization or not authorization.startswith("Bearer "):
+            raise HTTPException(401, "Войдите через Lead Flow или откройте приложение из Telegram.")
+        if not settings.leadflow_web_auth_url:
+            raise HTTPException(503, "Веб-вход Planner пока не включён.")
+        token = authorization[7:].strip()
+        if not token:
+            raise HTTPException(401, "Токен входа отсутствует.")
+        cache_key = hashlib.sha256(token.encode()).hexdigest()
+        cached = _web_identity_cache.get(cache_key)
+        web_user = cached[1] if cached and time.monotonic() - cached[0] < WEB_IDENTITY_CACHE_SECONDS else None
+        if web_user is None:
+            try:
+                async with httpx.AsyncClient(timeout=settings.leadflow_web_auth_timeout_seconds) as client:
+                    response = await client.get(
+                        settings.leadflow_web_auth_url,
+                        headers={"Authorization": f"Bearer {token}"},
+                    )
+            except httpx.RequestError:
+                raise HTTPException(503, "Сервис авторизации Lead Flow временно недоступен.") from None
+            if response.status_code == 401:
+                raise HTTPException(401, "Сессия истекла. Войдите снова.")
+            if response.status_code != 200:
+                raise HTTPException(403, "Доступ к Planner не подтверждён.")
+            try:
+                web_user = response.json()
+            except ValueError:
+                raise HTTPException(502, "Сервис авторизации вернул некорректный ответ.") from None
+            if not isinstance(web_user, dict) or not web_user.get("is_active"):
+                raise HTTPException(403, "Учётная запись отключена.")
+            _web_identity_cache[cache_key] = (time.monotonic(), web_user)
+        role = str(web_user.get("role") or "")
+        with store.connection() as connection:
+            if role == "manager":
+                bitrix_id = str(web_user.get("bitrix_user_id") or "")
+                row = connection.execute(
+                    "SELECT * FROM employees WHERE role='manager' AND active=1 AND bitrix_id=?",
+                    (bitrix_id,),
+                ).fetchone() if bitrix_id else None
+            elif role in {"admin", "supervisor"}:
+                row = connection.execute(
+                    "SELECT * FROM employees WHERE role='supervisor' AND active=1 ORDER BY id LIMIT 1"
+                ).fetchone()
+            else:
+                row = None
+        if row is None:
+            raise HTTPException(403, "Учётная запись Lead Flow не привязана к сотруднику Planner.")
+        user = dict(row)
+        user["name"] = str(web_user.get("full_name") or user["name"])
+        user["web_user_id"] = int(web_user.get("id") or 0)
+        user["auth_transport"] = "web"
         return user
 
     async def sync_plan_tasks(user: dict, plan: dict) -> None:

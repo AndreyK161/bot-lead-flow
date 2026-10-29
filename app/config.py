@@ -117,6 +117,10 @@ class Settings(BaseSettings):
     mini_app_url: str = "https://lead.prav-buro.ru/miniapp"
     manager_app_url: str = "https://tg.prav-buro.ru/workday/"
     manager_planner_database_path: str = "data/manager_planner.sqlite3"
+    # Optional bearer-token validation endpoint for the standalone web UI.
+    # Telegram Mini App authorization remains the default transport.
+    leadflow_web_auth_url: str = ""
+    leadflow_web_auth_timeout_seconds: float = 5.0
     mode_switch_user_id: int = 1297686797
     # Temporary read-only bridge used while the legacy distribution bot is
     # still online. An empty path keeps the bridge fully disabled.
