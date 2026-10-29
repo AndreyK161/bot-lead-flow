@@ -32,6 +32,12 @@ const leads = (v: unknown) => object(v) && number(v.processed) && object(v.stage
 const pipeline = (v: unknown) => object(v) && ['category_id','total','amount'].every(k => number(v[k])) && object(v.stages) && Object.values(v.stages).every(number);
 const crmSummary = (v: unknown) => object(v) && typeof v.available === 'boolean' && day(v.day) && optional(v.message,text) && optional(v.calls,calls) && optional(v.leads,leads) && optional(v.pipelines,x => list(x,pipeline));
 const crmPerformance = (v: unknown) => object(v) && typeof v.available === 'boolean' && object(v.period) && day(v.period.start) && day(v.period.end) && optional(v.message,text) && optional(v.calls,calls) && optional(v.leads,leads) && optional(v.employee, x => object(x) && number(x.id) && text(x.name));
+const dialerStage = (v: unknown) => object(v) && text(v.id) && text(v.name);
+const dialerFilters = (v: unknown) => object(v) && list(v.lead,dialerStage) && object(v.deal) && list(v.deal['0'],dialerStage) && list(v.deal['2'],dialerStage);
+const dialerItem = (v: unknown) => object(v) && ['id','position','attempts_count'].every(k => number(v[k])) && ['session_id','entity_type','entity_id','client_name','phone','bitrix_url','status'].every(k => text(v[k])) && optional(v.stage_id,x => nullable(x,text)) && optional(v.stage_name,x => nullable(x,text)) && optional(v.source_name,x => nullable(x,text)) && optional(v.last_result,x => nullable(x,text)) && optional(v.last_call_id,x => nullable(x,text));
+const dialerSession = (v: unknown) => object(v) && ['id','bitrix_user_id','manager_name','entity_type','date_from','date_to','status'].every(k => text(v[k])) && number(v.telegram_id) && flag(v.auto_advance);
+const dialerSummary = (v: unknown) => object(v) && ['total','completed','answered','failed','remaining'].every(k => number(v[k]));
+const dialerPayload = (v: unknown) => object(v) && dialerSession(v.session) && dialerSummary(v.summary) && nullable(v.current,dialerItem) && list(v.items,dialerItem);
 
 export function validateResponse(path: string, method: string, value: unknown): void {
   const route = path.split('?')[0];
@@ -44,9 +50,12 @@ export function validateResponse(path: string, method: string, value: unknown): 
     else if (route === '/distributions') valid = list(value,notice);
     else if (route === '/crm/summary') valid = crmSummary(value);
     else if (route === '/crm/performance') valid = crmPerformance(value);
+    else if (route === '/dialer/filters') valid = dialerFilters(value);
+    else if (route === '/dialer/session') valid = value === null || dialerPayload(value);
     else if (/^\/plans\/\d+\/history$/.test(route)) valid = list(value,audit);
     else if (/^\/plans\/\d+(\/report)?$/.test(route)) valid = detail(value);
   } else if (/^\/plans(\/\d+\/(approve|confirm|close))?$/.test(route)) valid = detail(value);
+  else if (/^\/dialer\/sessions(\/[0-9a-f-]+\/(start|result|cancel))?$/.test(route)) valid = dialerPayload(value);
   else if (/^\/employees(\/\d+)?$/.test(route)) valid = employee(value);
   else if (/^\/tasks\/\d+\/requests$/.test(route) || /^\/requests\/\d+\/decision$/.test(route)) {
     valid = object(value) && number(value.id) && choice(value.status,['pending','approved','rejected','cancelled']);

@@ -13,11 +13,11 @@ from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import get_settings
-from app import planner_access as access_registry
+from app import dialer, planner_access as access_registry
 
 from .auth import InvalidInitData, validate_init_data
 from .integrations import CRM_STATUS, PlannerCRM
-from .models import DecisionInput, EmployeeInput, EmployeePatch, GoalInput, MoveInput, PlanInput, TaskInput, TaskPatch, TimerInput
+from .models import DecisionInput, DialerResultInput, DialerSessionInput, EmployeeInput, EmployeePatch, GoalInput, MoveInput, PlanInput, TaskInput, TaskPatch, TimerInput
 from .store import DomainError, Store, today
 
 WORKDAY = {"start": "10:00", "end": "19:00", "timezone": "Europe/Moscow", "reminders_enabled": False}
@@ -215,6 +215,61 @@ def create_app() -> FastAPI:
         result["employee"] = {"id": employee["id"], "name": employee["name"]}
         _performance_cache[key] = (time.monotonic(), result)
         return result
+
+    @app.get("/api/dialer/filters")
+    async def dialer_filters(user=Depends(actor)):
+        try:
+            return await dialer.filters()
+        except Exception:
+            logger.exception("Dialer filters failed")
+            raise HTTPException(502, "Не удалось получить стадии из Bitrix24.") from None
+
+    @app.get("/api/dialer/session")
+    def dialer_session(user=Depends(actor)):
+        return dialer.current_session(int(user["telegram_id"]))
+
+    @app.post("/api/dialer/sessions", status_code=201)
+    async def create_dialer_session(body: DialerSessionInput, user=Depends(actor)):
+        employee = store.employee(user, body.employee_id)
+        if not employee.get("bitrix_id"):
+            raise HTTPException(409, "Менеджер не привязан к пользователю Bitrix24.")
+        try:
+            return await dialer.create_session(
+                telegram_id=int(user["telegram_id"]),
+                bitrix_user_id=str(employee["bitrix_id"]),
+                manager_name=str(employee["name"]),
+                entity_type=body.entity_type,
+                date_from=body.date_from,
+                date_to=body.date_to,
+                category_id=body.category_id,
+                stage_ids=body.stage_ids,
+                auto_advance=body.auto_advance,
+            )
+        except dialer.DialerError as exc:
+            raise HTTPException(exc.status, exc.message) from None
+
+    @app.post("/api/dialer/sessions/{session_id}/start")
+    async def start_dialer_session(session_id: str, user=Depends(actor)):
+        try:
+            return await dialer.start_next(session_id, int(user["telegram_id"]))
+        except dialer.DialerError as exc:
+            raise HTTPException(exc.status, exc.message) from None
+
+    @app.post("/api/dialer/sessions/{session_id}/result")
+    async def dialer_result(session_id: str, body: DialerResultInput, user=Depends(actor)):
+        try:
+            return await dialer.resolve(
+                session_id, body.item_id, body.result, int(user["telegram_id"]),
+            )
+        except dialer.DialerError as exc:
+            raise HTTPException(exc.status, exc.message) from None
+
+    @app.post("/api/dialer/sessions/{session_id}/cancel")
+    def cancel_dialer_session(session_id: str, user=Depends(actor)):
+        try:
+            return dialer.cancel(session_id, int(user["telegram_id"]))
+        except dialer.DialerError as exc:
+            raise HTTPException(exc.status, exc.message) from None
 
     @app.post("/api/plans/{plan_id}/approve")
     def approve(plan_id: int, user=Depends(actor)):

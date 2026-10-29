@@ -145,6 +145,54 @@ def _schema(*, postgres: bool) -> str:
         );
         CREATE INDEX IF NOT EXISTS idx_megafon_calls_phone_started
             ON megafon_calls(client_phone,started_at);
+        CREATE TABLE IF NOT EXISTS dialer_sessions (
+            id TEXT PRIMARY KEY,
+            telegram_id BIGINT NOT NULL,
+            bitrix_user_id TEXT NOT NULL,
+            manager_name TEXT NOT NULL,
+            entity_type TEXT NOT NULL CHECK(entity_type IN ('lead','deal')),
+            date_from TEXT NOT NULL, date_to TEXT NOT NULL,
+            category_id TEXT, stage_ids_json TEXT NOT NULL DEFAULT '[]',
+            status TEXT NOT NULL DEFAULT 'active',
+            auto_advance INTEGER NOT NULL DEFAULT 1,
+            created_at {timestamp} NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at {timestamp} NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_dialer_sessions_actor
+            ON dialer_sessions(telegram_id,created_at);
+        CREATE TABLE IF NOT EXISTS dialer_queue_items (
+            id {event_id}, session_id TEXT NOT NULL REFERENCES dialer_sessions(id) ON DELETE CASCADE,
+            position INTEGER NOT NULL,
+            entity_type TEXT NOT NULL, entity_id TEXT NOT NULL,
+            client_name TEXT NOT NULL DEFAULT '', phone TEXT NOT NULL,
+            stage_id TEXT, stage_name TEXT, source_name TEXT,
+            bitrix_url TEXT NOT NULL DEFAULT '',
+            status TEXT NOT NULL DEFAULT 'pending', attempts_count INTEGER NOT NULL DEFAULT 0,
+            last_result TEXT, last_call_id TEXT,
+            created_at {timestamp} NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            updated_at {timestamp} NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            UNIQUE(session_id,entity_type,entity_id)
+        );
+        CREATE INDEX IF NOT EXISTS idx_dialer_items_session_status
+            ON dialer_queue_items(session_id,status,position);
+        CREATE TABLE IF NOT EXISTS dialer_call_attempts (
+            id {event_id}, item_id BIGINT NOT NULL REFERENCES dialer_queue_items(id) ON DELETE CASCADE,
+            session_id TEXT NOT NULL REFERENCES dialer_sessions(id) ON DELETE CASCADE,
+            call_id TEXT UNIQUE, status TEXT NOT NULL DEFAULT 'starting', result TEXT,
+            started_at {timestamp} NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            connected_at {timestamp}, finished_at {timestamp},
+            duration_seconds INTEGER NOT NULL DEFAULT 0, error_text TEXT,
+            updated_at {timestamp} NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_dialer_attempts_session
+            ON dialer_call_attempts(session_id,started_at);
+        CREATE TABLE IF NOT EXISTS dialer_call_events (
+            event_key TEXT PRIMARY KEY, call_id TEXT NOT NULL,
+            command TEXT, event_type TEXT, direction TEXT, status TEXT,
+            occurred_at {timestamp} NOT NULL DEFAULT CURRENT_TIMESTAMP
+        );
+        CREATE INDEX IF NOT EXISTS idx_dialer_events_call
+            ON dialer_call_events(call_id,occurred_at);
     '''
 
 

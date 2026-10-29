@@ -90,3 +90,18 @@ class GoalInput(Input):
 class DecisionInput(Input):
     decision: Literal["approved", "rejected"]
     comment: Annotated[str, Field(max_length=2000)] = ""
+
+
+class DialerSessionInput(Input):
+    employee_id: Id | None = None
+    entity_type: Literal["lead", "deal"] = "lead"
+    date_from: date
+    date_to: date
+    category_id: Literal["0", "2"] | None = None
+    stage_ids: list[Annotated[str, Field(min_length=1, max_length=80)]] = Field(default_factory=list, max_length=100)
+    auto_advance: bool = True
+
+
+class DialerResultInput(Input):
+    item_id: Id
+    result: Literal["answered", "failed", "voicemail", "skipped", "postponed", "retry"]

@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { api } from './api';
-import type { Audit, Client, CrmPerformance, CrmSummary, Employee, GoalRequest, Me, Plan, Task } from './types';
+import type { Audit, Client, CrmPerformance, CrmSummary, DialerFilters, DialerPayload, Employee, GoalRequest, Me, Plan, Task } from './types';
 
 const kindName = { quantitative: 'План / факт', general: 'Задача', client: 'По клиенту', bitrix: 'Bitrix24' };
 const statusName = { todo: 'К выполнению', in_progress: 'В работе', done: 'Выполнена', moved: 'Перенесена', draft: 'Черновик', approved: 'Подтверждён', closed: 'День закрыт', pending: 'Ожидает решения', rejected: 'Отклонён', cancelled: 'Отменён' };
@@ -19,6 +19,7 @@ function Icon({ name, size = 20 }: { name: string; size?: number }) {
     history: <><path d="M3 10a9 9 0 1 1 1 8M3 4v6h6m3-4v6l4 2"/></>,
     people: <><circle cx="9" cy="8" r="3"/><path d="M3 21v-3a6 6 0 0 1 12 0v3m1-17a3 3 0 0 1 0 6m3 11v-3a6 6 0 0 0-2-4"/></>,
     requests: <><path d="M20 11a8 8 0 0 1-8 8H4l-2 3V11a9 9 0 0 1 18 0Z"/><path d="M8 11h8m-8 4h5"/></>,
+    calls: <><path d="M7 3h3l2 5-2 2a16 16 0 0 0 4 4l2-2 5 2v3a4 4 0 0 1-4 4C9 20 4 15 3 7a4 4 0 0 1 4-4Z"/><path d="M15 5h4m-2-2v4"/></>,
     plus: <path d="M12 5v14M5 12h14"/>,
     play: <path d="m8 5 11 7-11 7Z"/>, pause: <path d="M8 5v14m8-14v14"/>,
     check: <path d="m5 12 4 4L19 6"/>, close: <path d="m6 6 12 12M6 18 18 6"/>,
@@ -53,6 +54,14 @@ export default function App({ client = api, demo = false }: { client?: Client; d
   const [profileEnd, setProfileEnd] = useState('');
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileError, setProfileError] = useState('');
+  const [dialer, setDialer] = useState<DialerPayload | null>();
+  const [dialerFilters, setDialerFilters] = useState<DialerFilters>();
+  const [dialerLoading, setDialerLoading] = useState(false);
+  const [dialerEntity, setDialerEntity] = useState<'lead' | 'deal'>('lead');
+  const [dialerCategory, setDialerCategory] = useState<'0' | '2'>('0');
+  const [dialerFrom, setDialerFrom] = useState('');
+  const [dialerTo, setDialerTo] = useState('');
+  const [dialerStages, setDialerStages] = useState<string[]>([]);
   const [audit, setAudit] = useState<Audit[]>([]);
   const [error, setError] = useState('');
   const [toast, setToast] = useState('');
@@ -75,7 +84,7 @@ export default function App({ client = api, demo = false }: { client?: Client; d
     let alive = true;
     client<Me>('/me').then(value => {
       if (!alive) return;
-      setMe(value); setDay(value.today); setProfileStart(value.today); setProfileEnd(value.today);
+      setMe(value); setDay(value.today); setProfileStart(value.today); setProfileEnd(value.today); setDialerFrom(value.today); setDialerTo(value.today);
       if (value.user.role === 'manager') setEmployeeId(value.user.id);
     }).catch(e => { if (alive) { setError(e.message); setLoading(false); } });
     return () => { alive = false; };
@@ -172,6 +181,26 @@ export default function App({ client = api, demo = false }: { client?: Client; d
 
   useEffect(() => { if (section === 'profile') void loadPerformance(); }, [section, loadPerformance]);
 
+  const loadDialer = useCallback(async (quiet = false) => {
+    if (!me) return;
+    if (!quiet) setDialerLoading(true);
+    try {
+      const [current, available] = await Promise.all([
+        client<DialerPayload | null>('/dialer/session'),
+        dialerFilters ? Promise.resolve(dialerFilters) : client<DialerFilters>('/dialer/filters'),
+      ]);
+      setDialer(current); setDialerFilters(available);
+    } catch (e) { if (!quiet) setError((e as Error).message); }
+    finally { if (!quiet) setDialerLoading(false); }
+  }, [client, me, dialerFilters]);
+
+  useEffect(() => {
+    if (section !== 'calls' || !me) return;
+    void loadDialer();
+    const timer = setInterval(() => { if (!document.hidden) void loadDialer(true); }, 2500);
+    return () => clearInterval(timer);
+  }, [section, me, loadDialer]);
+
   async function act(path: string, method = 'POST', data?: unknown, message = 'Сохранено') {
     if (busy || view !== currentView.current) return;
     const operationView = view;
@@ -193,13 +222,22 @@ export default function App({ client = api, demo = false }: { client?: Client; d
     }
     finally { setBusy(false); }
   }
+  async function dialerAct(path: string, data?: unknown, message = 'Готово') {
+    if (busy) return;
+    setBusy(true); setError('');
+    try {
+      const value = await client<DialerPayload>(path, 'POST', data);
+      setDialer(value); setToast(message);
+    } catch (e) { setError((e as Error).message); }
+    finally { setBusy(false); }
+  }
   function selectPlan(p: Plan, destination = 'plan') { setEmployeeId(p.employee_id); setDay(p.day); setSection(destination); setShowAudit(false); }
   const createPlan = (fromPrevious: boolean) => act('/plans', 'POST', { day, employee_id: employeeId, from_previous: fromPrevious }, 'План создан');
   const tasks = plan?.tasks || [];
   const selectedTasks = tasks.filter(t => filter === 'all' || t.status === filter);
   const elapsed = (t: Task) => t.actual_seconds + (t.timer_started ? Math.max(0, Math.floor((now + offset) / 1000) - t.timer_started) : 0);
   const pending = requests.filter(r => r.status === 'pending').length;
-  const tabs = supervisor ? [['home', 'Обзор отдела'], ['people', 'Сотрудники'], ['plan', 'Планы'], ['results', 'Прогресс'], ['requests', 'Согласования'], ['history', 'История'], ['reports', 'Отчёты']] : [['home', 'Главная'], ['profile', 'Мой профиль'], ['plan', 'Мой план'], ['tasks', 'Задачи'], ['results', 'Мои результаты'], ['history', 'История']];
+  const tabs = supervisor ? [['home', 'Обзор отдела'], ['people', 'Сотрудники'], ['calls', 'Обзвон'], ['plan', 'Планы'], ['results', 'Прогресс'], ['requests', 'Согласования'], ['history', 'История'], ['reports', 'Отчёты']] : [['home', 'Главная'], ['profile', 'Мой профиль'], ['calls', 'Обзвон'], ['plan', 'Мой план'], ['tasks', 'Задачи'], ['results', 'Мои результаты'], ['history', 'История']];
 
   if (!me) return <div className="welcome"><div className="brand-mark"><Icon name="plan" size={32}/></div><p className="eyebrow">ОТДЕЛ ПРОДАЖ</p><h1>Хороший день<br/>начинается с плана.</h1><p>{loading ? 'Открываем ваше рабочее пространство…' : error}</p>{!loading && <button onClick={() => window.location.reload()}>Попробовать снова</button>}<span className="muted">Планы, задачи и результаты — в одном месте</span></div>;
 
@@ -224,6 +262,45 @@ export default function App({ client = api, demo = false }: { client?: Client; d
     {profileError && <p className="error" role="alert">{profileError}</p>}
     {profileLoading ? <div className="empty"><div className="spinner"/><p>Загружаем статистику…</p></div> : performance && (!performance.available ? <p className="notice">{performance.message}</p> : <><div className="profile-stats"><article className="card"><span>Обработано лидов</span><strong>{performance.leads?.processed || 0}</strong></article><article className="card"><span>Общая длительность</span><strong>{minutes(performance.calls?.duration_seconds || 0)}</strong></article><article className="card"><span>Всего звонков</span><strong>{performance.calls?.total || 0}</strong></article><article className="card"><span>Исходящих</span><strong>{performance.calls?.outbound || 0}</strong></article><article className="card"><span>Успешных</span><strong>{performance.calls?.answered || 0}</strong></article><article className="card"><span>Дольше 3 минут</span><strong>{performance.calls?.long_calls || 0}</strong></article></div><section className="card stage-summary"><div className="section-heading"><h3>Стадии обработанных лидов</h3><span className="muted">{dateLabel(performance.period.start)} — {dateLabel(performance.period.end)}</span></div><div className="stage-chips">{Object.entries(performance.leads?.stages || {}).map(([stage, count]) => <span key={stage}>{stage} <b>{count}</b></span>)}{!Object.keys(performance.leads?.stages || {}).length && <p className="muted">За выбранный период обработанных лидов нет.</p>}</div></section></>)}
   </>;
+  const dialerStatus: Record<string, string> = { pending: 'Ожидает', starting: 'Запускаем', calling: 'Идёт вызов', connected: 'Соединение', awaiting_confirmation: 'Нужен результат', answered: 'Клиент ответил', no_answer: 'Не ответил', busy: 'Занято', unavailable: 'Недоступен', voicemail: 'Автоответчик', skipped: 'Пропущен', postponed: 'Отложен', error: 'Ошибка запуска' };
+  const availableStages = dialerFilters ? (dialerEntity === 'lead' ? dialerFilters.lead : dialerFilters.deal[dialerCategory]) : [];
+  const renderDialer = () => {
+    const active = dialer && ['active', 'paused'].includes(dialer.session.status);
+    const current = dialer?.current;
+    const buildQueue = async (event: FormEvent) => {
+      event.preventDefault();
+      if (supervisor && !employeeId) { setError('Выберите менеджера для обзвона.'); return; }
+      await dialerAct('/dialer/sessions', {
+        employee_id: employeeId, entity_type: dialerEntity, date_from: dialerFrom, date_to: dialerTo,
+        category_id: dialerEntity === 'deal' ? dialerCategory : null, stage_ids: dialerStages,
+        auto_advance: true,
+      }, 'Очередь сформирована');
+    };
+    return <div className="dialer-page">
+      {!active && <section className="card dialer-builder"><div className="section-heading compact"><div><h2>Сформировать очередь</h2><p className="muted">Только клиенты выбранного менеджера с номером телефона</p></div><span className="icon-tile blue"><Icon name="calls"/></span></div>
+        <form onSubmit={buildQueue}>
+          {supervisor && <label>Менеджер<select value={employeeId || ''} onChange={e => setEmployeeId(e.target.value ? Number(e.target.value) : undefined)} required><option value="">Выберите менеджера</option>{employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}</select></label>}
+          <div className="dialer-form-grid"><label>Что обзваниваем<select value={dialerEntity} onChange={e => { setDialerEntity(e.target.value as 'lead' | 'deal'); setDialerStages([]); }}><option value="lead">Лиды</option><option value="deal">Сделки</option></select></label>{dialerEntity === 'deal' && <label>Воронка<select value={dialerCategory} onChange={e => { setDialerCategory(e.target.value as '0' | '2'); setDialerStages([]); }}><option value="0">Продажи</option><option value="2">Категория 2</option></select></label>}<label>Созданы с<input type="date" value={dialerFrom} onChange={e => setDialerFrom(e.target.value)} required/></label><label>Созданы по<input type="date" value={dialerTo} onChange={e => setDialerTo(e.target.value)} required/></label></div>
+          <fieldset className="dialer-stages"><legend>Стадии <span className="muted">· ничего не выбирайте, чтобы взять все</span></legend>{availableStages.map(stage => <label className="checkbox" key={stage.id}><input type="checkbox" checked={dialerStages.includes(stage.id)} onChange={e => setDialerStages(old => e.target.checked ? [...old, stage.id] : old.filter(id => id !== stage.id))}/><span>{stage.name}</span></label>)}</fieldset>
+          <button disabled={busy || dialerLoading || !dialerFilters}><Icon name="calls"/>Загрузить очередь</button>
+        </form>
+      </section>}
+      {dialerLoading && !dialer ? <div className="empty"><div className="spinner"/><p>Загружаем обзвон…</p></div> : dialer && <>
+        <div className="dialer-stats"><article className="card"><span>Всего</span><strong>{dialer.summary.total}</strong></article><article className="card"><span>Обработано</span><strong>{dialer.summary.completed}</strong></article><article className="card"><span>Ответили</span><strong>{dialer.summary.answered}</strong></article><article className="card"><span>Осталось</span><strong>{dialer.summary.remaining}</strong></article></div>
+        {active && current && <section className="card dialer-current"><div className="section-heading compact"><div><p className="eyebrow">ТЕКУЩИЙ КЛИЕНТ · #{current.position}</p><h2>{current.client_name || `Клиент #${current.entity_id}`}</h2></div><span className={`badge ${current.status}`}>{dialerStatus[current.status] || current.status}</span></div><div className="dialer-contact"><div><span>Телефон</span><strong>+{current.phone}</strong></div><div><span>Стадия</span><strong>{current.stage_name || '—'}</strong></div><a href={current.bitrix_url} target="_blank" rel="noreferrer">Открыть в Bitrix24 →</a></div>
+          <div className="dialer-actions">
+            {['pending', 'error'].includes(current.status) && <button disabled={busy} onClick={() => void dialerAct(`/dialer/sessions/${dialer.session.id}/start`, undefined, 'Звонок запущен')}><Icon name="play"/>{current.status === 'error' ? 'Повторить звонок' : 'Начать обзвон'}</button>}
+            {['starting', 'calling', 'connected'].includes(current.status) && <div className="notice"><span className="connection-dot"/>Ожидаем события от МегаФона. Телефон менеджера должен сейчас звонить.</div>}
+            {current.status === 'awaiting_confirmation' && <><button disabled={busy} onClick={() => void dialerAct(`/dialer/sessions/${dialer.session.id}/result`, { item_id: current.id, result: 'answered' }, 'Дозвон подтверждён')}><Icon name="check"/>Клиент ответил</button><button className="secondary" disabled={busy} onClick={() => void dialerAct(`/dialer/sessions/${dialer.session.id}/result`, { item_id: current.id, result: 'failed' }, 'Недозвон сохранён')}>Не дозвонились</button><button className="secondary" disabled={busy} onClick={() => void dialerAct(`/dialer/sessions/${dialer.session.id}/result`, { item_id: current.id, result: 'voicemail' }, 'Автоответчик сохранён')}>Автоответчик</button></>}
+            {dialer.session.status === 'paused' && current.status === 'pending' && <button disabled={busy} onClick={() => void dialerAct(`/dialer/sessions/${dialer.session.id}/start`, undefined, 'Обзвон продолжен')}><Icon name="arrow"/>Следующий клиент</button>}
+            {!['starting', 'calling', 'connected', 'awaiting_confirmation'].includes(current.status) && <button className="quiet" disabled={busy} onClick={() => void dialerAct(`/dialer/sessions/${dialer.session.id}/result`, { item_id: current.id, result: 'skipped' }, 'Клиент пропущен')}>Пропустить</button>}
+          </div>
+        </section>}
+        {active && !current && <section className="card empty"><Icon name="check" size={40}/><h3>Очередь обработана</h3><p>Все доступные клиенты пройдены.</p></section>}
+        <section className="card dialer-queue"><div className="section-heading compact"><div><h2>Очередь</h2><p className="muted">{dialer.session.manager_name} · {dateLabel(dialer.session.date_from)} — {dateLabel(dialer.session.date_to)}</p></div>{active && <button className="quiet" disabled={busy} onClick={() => void dialerAct(`/dialer/sessions/${dialer.session.id}/cancel`, undefined, 'Очередь отменена')}>Завершить</button>}</div><div className="dialer-items">{dialer.items.map(item => <a href={item.bitrix_url} target="_blank" rel="noreferrer" className={`dialer-item ${item.id === current?.id ? 'selected' : ''}`} key={item.id}><span className="dialer-position">{item.position}</span><span><b>{item.client_name || `Клиент #${item.entity_id}`}</b><small>{item.stage_name || 'Без стадии'} · +{item.phone}</small></span><span className={`badge ${item.status}`}>{dialerStatus[item.status] || item.status}</span></a>)}</div></section>
+      </>}
+    </div>;
+  };
   const renderHistory = () => <section className="card audit"><h3>История изменений</h3>{audit.length === 0 && <p className="muted">{loadErrors.history ? 'История не загружена. Повторите загрузку выше.' : 'Изменений пока нет.'}</p>}{audit.map(a => <article key={a.id}>
     <div><strong>{actionName[a.action] || 'Изменение'}</strong><small>{a.actor_name} · {new Date(a.created_at * 1000).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' })}</small></div>
     {a.entity === 'task' && <p>{String(a.after_json?.title || a.before_json?.title || `Задача №${a.entity_id}`)}</p>}
@@ -263,12 +340,12 @@ export default function App({ client = api, demo = false }: { client?: Client; d
     {import.meta.env.DEV && demo && <div className="demo-banner">ДЕМОНСТРАЦИЯ · Пример интерфейса, данные вымышлены · <a href="/preview.html?role=manager">Менеджер</a> / <a href="/preview.html?role=supervisor">Руководитель</a></div>}
     <div className="workspace"><aside className="sidebar"><button className="brand" onClick={() => setSection('home')}><span className="brand-mark">П</span><span><b>План дня</b><small>РАБОЧЕЕ ПРОСТРАНСТВО</small></span></button><p className="nav-caption">{supervisor ? 'УПРАВЛЕНИЕ ОТДЕЛОМ' : 'ЛИЧНЫЙ КАБИНЕТ'}</p><nav aria-label="Разделы">{tabs.map(([key, title]) => <button key={key} className={section === key ? 'active' : ''} onClick={() => { setSection(key); setShowAudit(false); }}><Icon name={key === 'reports' ? 'results' : key === 'profile' ? 'people' : key}/><span>{title}</span>{key === 'requests' && pending > 0 && <em>{pending}</em>}</button>)}</nav><div className="sidebar-bottom"><span className="connection-dot"/>Lead Flow подключён<small>{me.crm.connected ? 'Bitrix24 и телефония доступны' : me.crm.message}</small></div><button className="profile" onClick={() => !supervisor && setSection('profile')}><div className="avatar">{me.user.name[0]}</div><div><b>{me.user.name}</b><span>{supervisor ? 'Руководитель' : 'Менеджер · открыть профиль'}</span></div></button></aside>
     <div className="main-shell"><header className="topbar"><span>Рабочее пространство <span className="crumb">/ {tabs.find(t => t[0] === section)?.[1]}</span></span><div><span className="top-date">{dateLabel(me.today)}</span><span className="avatar small">{me.user.name[0]}</span></div></header><main className="page-content">
-      <div className="page-title"><div><p className="eyebrow">{supervisor ? 'КОМАНДА И РЕЗУЛЬТАТ' : 'РАБОЧЕЕ ПРОСТРАНСТВО'}</p><h1>{tabs.find(t => t[0] === section)?.[1]}</h1></div><button className="quiet" disabled={busy || loading || profileLoading} onClick={() => section === 'profile' ? void loadPerformance() : refresh().catch(e => setError(e.message))}>Обновить</button></div>
+      <div className="page-title"><div><p className="eyebrow">{supervisor ? 'КОМАНДА И РЕЗУЛЬТАТ' : 'РАБОЧЕЕ ПРОСТРАНСТВО'}</p><h1>{tabs.find(t => t[0] === section)?.[1]}</h1></div><button className="quiet" disabled={busy || loading || profileLoading || dialerLoading} onClick={() => section === 'profile' ? void loadPerformance() : section === 'calls' ? void loadDialer() : refresh().catch(e => setError(e.message))}>Обновить</button></div>
       {error && <div className="error" role="alert">{error}<button className="icon-button" aria-label="Закрыть ошибку" onClick={() => setError('')}><Icon name="close"/></button></div>}
       {Object.entries(loadErrors).map(([key, message]) => <div className="error" role="alert" key={key}><span>{({ employees: 'Сотрудники', plans: 'Планы', requests: 'Согласования', distributions: 'Уведомления', history: 'История', crm: 'Bitrix24 и звонки' } as Record<string, string>)[key]}: {message}</span><button className="secondary" onClick={() => void refresh(key)}>Повторить загрузку</button></div>)}
       {toast && <div className="toast" role="status"><Icon name="check"/>{toast}</div>}
 
-      {section === 'home' ? renderDashboard() : section === 'profile' && !supervisor ? renderProfile() : section === 'people' && supervisor ? <>
+      {section === 'home' ? renderDashboard() : section === 'profile' && !supervisor ? renderProfile() : section === 'calls' ? renderDialer() : section === 'people' && supervisor ? <>
         <section className="hero"><p className="eyebrow">ВМЕСТЕ К ЦЕЛИ</p><h2>У каждого — ясный план.<br/>У вас — общая картина.</h2><p>{employeesLoaded ? `${employees.filter(e => e.active).length} сотрудника в команде` : loadErrors.employees ? 'Сотрудники не загружены' : 'Загрузка сотрудников'}</p><button className="light" onClick={() => setModal({ type: 'employee' })}><Icon name="plus"/>Добавить сотрудника</button></section>
         <div className="section-heading"><h2>Команда</h2><span className="muted">{dateLabel(me.today)}</span></div>
         <div className="employee-grid">{employees.map(e => <section className="card employee" key={e.id}><div className="row"><div className="avatar">{e.name[0]}</div><div><h3>{e.name}</h3><span className="muted">{!e.active ? 'Доступ выключен' : e.telegram_id ? 'Менеджер' : 'Ожидает подключения Telegram'}</span></div></div><div className="actions"><button className="secondary" onClick={() => { setEmployeeId(e.id); setDay(me.today); setSection('plan'); }}>Открыть план <Icon name="arrow"/></button><button className="quiet" onClick={() => setModal({ type: 'employee', employee: e })}>Изменить</button></div></section>)}</div>

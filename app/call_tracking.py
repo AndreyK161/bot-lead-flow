@@ -9,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, HTTPException, Request, status
 
-from app import store
+from app import dialer, store
 from app.bitrix_client import BitrixClient
 from app.config import get_settings
 
@@ -96,10 +96,11 @@ async def megafon_webhook(request: Request) -> dict[str, str]:
     if not settings.megafon_crm_token or supplied != settings.megafon_crm_token:
         raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="Invalid CRM token")
     try:
+        dialer_handled = await dialer.process_callback(data)
         saved = save_history_event(data)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return {"status": "ok" if saved else "ignored"}
+    return {"status": "ok" if saved or dialer_handled else "ignored"}
 
 
 def _handoff_at(item: dict) -> datetime | None:

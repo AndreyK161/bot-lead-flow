@@ -357,6 +357,59 @@ class BitrixClient:
             ],
         })
 
+    async def get_dialer_leads(
+        self, user_id: str | int, start_iso: str, end_iso: str, stage_ids: list[str],
+    ) -> list[dict[str, Any]]:
+        filters: dict[str, Any] = {
+            "ASSIGNED_BY_ID": str(user_id),
+            ">=DATE_CREATE": start_iso,
+            "<DATE_CREATE": end_iso,
+        }
+        if stage_ids:
+            filters["STATUS_ID"] = list(dict.fromkeys(stage_ids))
+        return await self._call_all("crm.lead.list", {
+            "order": {"DATE_CREATE": "ASC", "ID": "ASC"},
+            "filter": filters,
+            "select": [
+                "ID", "TITLE", "NAME", "SECOND_NAME", "LAST_NAME", "PHONE",
+                "STATUS_ID", "SOURCE_ID", "ASSIGNED_BY_ID", "CONTACT_ID", "DATE_CREATE",
+            ],
+        })
+
+    async def get_dialer_deals(
+        self, user_id: str | int, category_id: str, start_iso: str, end_iso: str,
+        stage_ids: list[str],
+    ) -> list[dict[str, Any]]:
+        filters: dict[str, Any] = {
+            "ASSIGNED_BY_ID": str(user_id),
+            "CATEGORY_ID": str(category_id),
+            ">=DATE_CREATE": start_iso,
+            "<DATE_CREATE": end_iso,
+        }
+        if stage_ids:
+            filters["STAGE_ID"] = list(dict.fromkeys(stage_ids))
+        return await self._call_all("crm.deal.list", {
+            "order": {"DATE_CREATE": "ASC", "ID": "ASC"},
+            "filter": filters,
+            "select": [
+                "ID", "TITLE", "STAGE_ID", "CATEGORY_ID", "SOURCE_ID",
+                "ASSIGNED_BY_ID", "CONTACT_ID", "DATE_CREATE",
+            ],
+        })
+
+    async def add_crm_timeline_comment(
+        self, entity_type: str, entity_id: str | int, comment: str,
+    ) -> None:
+        if entity_type not in {"lead", "deal"}:
+            raise ValueError("Unsupported CRM entity type")
+        await self._call("crm.timeline.comment.add", {
+            "fields": {
+                "ENTITY_ID": str(entity_id),
+                "ENTITY_TYPE": entity_type,
+                "COMMENT": comment,
+            },
+        })
+
     async def get_contacts_by_ids(self, contact_ids: list[str]) -> list[dict[str, Any]]:
         return await self._get_by_ids(
             "crm.contact.list", contact_ids, ["ID", "PHONE"],

@@ -14,6 +14,10 @@ assert(source.includes('Этот месяц'), 'profile period presets are missi
 assert(source.includes('Только чтение'), 'read-only CRM label is missing');
 assert(source.includes('Обработано лидов'), 'processed leads metric is missing');
 assert(source.includes('Общая длительность'), 'total call duration metric is missing');
+assert(source.includes("['calls', 'Обзвон']"), 'manager dialer navigation is missing');
+assert(source.includes('/dialer/sessions'), 'dialer queue actions are missing');
+assert(source.includes('Клиент ответил'), 'dialer confirmation action is missing');
+assert(response.includes("route === '/dialer/session'"), 'dialer response is not validated');
 assert(source.includes('Обзор отдела'), 'desktop supervisor dashboard is missing');
 assert(source.includes('className="sidebar"'), 'desktop sidebar shell is missing');
 assert(response.includes("route === '/crm/summary'"), 'CRM response is not validated');

@@ -128,6 +128,14 @@ class Settings(BaseSettings):
     leadflow_presence_token: str = ""
     megafon_crm_token: str = ""
     megafon_bitrix_user_map: str = "{}"
+    # CRM API used by the manager dialer.  Secrets stay in the environment;
+    # MEGAFON_DIALER_USERS maps a Bitrix user id to user/group/clid, for example
+    # {"42":{"user":"701","clid":"7495..."}}.
+    megafon_vats_api_url: str = ""
+    megafon_vats_api_key: str = ""
+    megafon_vats_auth_mode: str = "header"
+    megafon_vats_auth_header: str = "X-API-KEY"
+    megafon_dialer_users: str = "{}"
     bitrix_automation_user_ids: str = "24"
 
     @property
@@ -165,6 +173,30 @@ class Settings(BaseSettings):
         if not isinstance(value, dict):
             raise ValueError("MEGAFON_BITRIX_USER_MAP must be an object")
         return {str(extension): str(user_id) for extension, user_id in value.items()}
+
+    @property
+    def megafon_dialer_user_map(self) -> dict[str, dict[str, str]]:
+        try:
+            value = json.loads(self.megafon_dialer_users or "{}")
+        except json.JSONDecodeError as exc:
+            raise ValueError("MEGAFON_DIALER_USERS must be a JSON object") from exc
+        if not isinstance(value, dict):
+            raise ValueError("MEGAFON_DIALER_USERS must be a JSON object")
+        result: dict[str, dict[str, str]] = {}
+        for bitrix_id, raw in value.items():
+            if not isinstance(raw, dict):
+                continue
+            config = {
+                key: str(raw.get(key) or "").strip()
+                for key in ("user", "group", "clid")
+            }
+            if config["user"] or config["group"]:
+                result[str(bitrix_id)] = config
+        # Existing extension -> Bitrix bindings are a safe default for VATS
+        # installations where the extension is also the CRM API user value.
+        for extension, bitrix_id in self.megafon_bitrix_users.items():
+            result.setdefault(str(bitrix_id), {"user": str(extension), "group": "", "clid": ""})
+        return result
 
 
 @lru_cache
