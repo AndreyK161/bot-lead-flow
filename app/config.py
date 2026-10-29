@@ -121,6 +121,9 @@ class Settings(BaseSettings):
     # Telegram Mini App authorization remains the default transport.
     leadflow_web_auth_url: str = ""
     leadflow_web_auth_timeout_seconds: float = 5.0
+    telegram_bot_username: str = "lead_notification_prav_buro_bot"
+    telegram_login_max_age_seconds: int = 600
+    telegram_web_session_seconds: int = 43200
     mode_switch_user_id: int = 1297686797
     # Temporary read-only bridge used while the legacy distribution bot is
     # still online. An empty path keeps the bridge fully disabled.

@@ -22,6 +22,10 @@ assert(source.includes('Клиент ответил'), 'dialer confirmation acti
 assert(response.includes("route === '/dialer/session'"), 'dialer response is not validated');
 assert(api.includes("WEB_TOKEN_KEY = 'access_token'"), 'shared Lead Flow web token is missing');
 assert(api.includes("'/api/v1/auth/login'"), 'web login does not use Lead Flow auth');
+assert(api.includes("'/manager/api/auth/telegram'"), 'Telegram web login is missing');
+assert(main.includes('telegram-widget.js'), 'Telegram Login Widget is missing');
+assert(api.includes("'/manager/api/auth/telegram'"), 'Telegram web login is missing');
+assert(main.includes('telegram-widget.js'), 'Telegram Login Widget is missing');
 assert(main.includes('Рабочее пространство отдела продаж'), 'desktop web login is missing');
 assert(source.includes('Обзор отдела'), 'desktop supervisor dashboard is missing');
 assert(source.includes('className="sidebar"'), 'desktop sidebar shell is missing');

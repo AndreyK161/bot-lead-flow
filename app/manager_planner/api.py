@@ -8,7 +8,7 @@ import time
 from datetime import date
 from pathlib import Path
 
-from fastapi import Depends, FastAPI, Header, HTTPException
+from fastapi import Body, Depends, FastAPI, Header, HTTPException
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -17,7 +17,7 @@ import httpx
 from app.config import get_settings
 from app import dialer, planner_access as access_registry
 
-from .auth import InvalidInitData, validate_init_data
+from .auth import InvalidInitData, InvalidTelegramLogin, issue_web_session, validate_init_data, validate_login_widget, validate_web_session
 from .integrations import CRM_STATUS, PlannerCRM
 from .models import DecisionInput, DialerResultInput, DialerSessionInput, EmployeeInput, EmployeePatch, GoalInput, MoveInput, PlanInput, TaskInput, TaskPatch, TimerInput
 from .store import DomainError, Store, today
@@ -75,9 +75,48 @@ def create_app() -> FastAPI:
         response.headers["Content-Security-Policy"] = (
             "default-src 'self'; script-src 'self' https://telegram.org; style-src 'self' 'unsafe-inline'; "
             "img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; "
+            "frame-src https://oauth.telegram.org https://telegram.org; "
             "frame-ancestors 'self' https://web.telegram.org https://*.telegram.org"
         )
         return response
+
+    def telegram_actor(telegram_id: int) -> dict:
+        identity = access_registry.authorized_identity(telegram_id)
+        if identity is None:
+            raise HTTPException(403, "Доступ к Planner пока не открыт.")
+        user = store.actor(telegram_id)
+        if identity["role"] != "owner" and user["role"] != identity["role"]:
+            raise HTTPException(403, "Роль Planner не совпадает с перенесённой ролью.")
+        if identity["role"] == "manager" and str(user.get("bitrix_id") or "") != str(identity["bitrix_user_id"] or ""):
+            raise HTTPException(403, "Привязка менеджера к Bitrix не совпадает.")
+        return user
+
+    @app.get("/api/auth/telegram/config")
+    async def telegram_auth_config():
+        username = get_settings().telegram_bot_username.strip().lstrip("@")
+        if not username:
+            raise HTTPException(503, "Вход через Telegram пока не настроен.")
+        return {"bot_username": username}
+
+    @app.post("/api/auth/telegram")
+    async def telegram_auth(payload: dict = Body(...)):
+        settings = get_settings()
+        try:
+            telegram_id = validate_login_widget(
+                payload, settings.telegram_bot_token,
+                max_age=settings.telegram_login_max_age_seconds,
+            )
+        except InvalidTelegramLogin as exc:
+            raise HTTPException(401, str(exc)) from None
+        telegram_actor(telegram_id)
+        return {
+            "access_token": issue_web_session(
+                telegram_id, settings.telegram_bot_token,
+                ttl=settings.telegram_web_session_seconds,
+            ),
+            "token_type": "telegram",
+            "expires_in": settings.telegram_web_session_seconds,
+        }
 
     async def actor(authorization: str | None = Header(default=None)):
         settings = get_settings()
@@ -86,17 +125,15 @@ def create_app() -> FastAPI:
                 telegram_id = validate_init_data(authorization[4:], settings.telegram_bot_token)
             except InvalidInitData as exc:
                 raise HTTPException(401, str(exc)) from None
-            identity = access_registry.authorized_identity(telegram_id)
-            if identity is None:
-                raise HTTPException(403, "Доступ к Planner пока не открыт.")
-            user = store.actor(telegram_id)
-            if identity["role"] != "owner" and user["role"] != identity["role"]:
-                raise HTTPException(403, "Роль Planner не совпадает с перенесённой ролью.")
-            if identity["role"] == "manager" and str(user.get("bitrix_id") or "") != str(identity["bitrix_user_id"] or ""):
-                raise HTTPException(403, "Привязка менеджера к Bitrix не совпадает.")
-            return user
+            return telegram_actor(telegram_id)
+        if authorization and authorization.startswith("tgweb "):
+            try:
+                telegram_id = validate_web_session(authorization[6:].strip(), settings.telegram_bot_token)
+            except InvalidTelegramLogin as exc:
+                raise HTTPException(401, str(exc)) from None
+            return telegram_actor(telegram_id)
         if not authorization or not authorization.startswith("Bearer "):
-            raise HTTPException(401, "Войдите через Lead Flow или откройте приложение из Telegram.")
+            raise HTTPException(401, "Войдите через Telegram, Lead Flow или откройте приложение из бота.")
         if not settings.leadflow_web_auth_url:
             raise HTTPException(503, "Веб-вход Planner пока не включён.")
         token = authorization[7:].strip()
