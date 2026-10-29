@@ -24,6 +24,7 @@ WORKDAY = {"start": "10:00", "end": "19:00", "timezone": "Europe/Moscow", "remin
 logger = logging.getLogger(__name__)
 CRM_CACHE_SECONDS = 60
 _crm_cache: dict[tuple[int, str], tuple[float, dict]] = {}
+_performance_cache: dict[tuple[int, str, str], tuple[float, dict]] = {}
 
 
 static_path = Path(__file__).resolve().parent.parent / "static" / "manager"
@@ -176,6 +177,43 @@ def create_app() -> FastAPI:
                 "message": "Bitrix24 временно недоступен. План продолжает работать.",
             }
         _crm_cache[key] = (time.monotonic(), result)
+        return result
+
+    @app.get("/api/crm/performance")
+    async def crm_performance(
+        employee_id: int | None = None,
+        start: date | None = None,
+        end: date | None = None,
+        user=Depends(actor),
+    ):
+        # Store.employee enforces ownership: managers can only resolve themselves.
+        employee = store.employee(user, employee_id)
+        last_day = end or date.fromisoformat(today())
+        first_day = start or last_day
+        if first_day > last_day or (last_day - first_day).days > 366:
+            raise HTTPException(400, "Выберите корректный период не больше 367 дней.")
+        period = {"start": first_day.isoformat(), "end": last_day.isoformat()}
+        if not employee.get("bitrix_id"):
+            return {
+                "available": False, "period": period,
+                "message": "Сотрудник не привязан к Bitrix24.",
+            }
+        key = (int(employee["bitrix_id"]), period["start"], period["end"])
+        cached = _performance_cache.get(key)
+        if cached and time.monotonic() - cached[0] < CRM_CACHE_SECONDS:
+            return cached[1]
+        try:
+            result = await PlannerCRM().performance(*key)
+        except Exception:
+            logger.exception(
+                "Planner CRM performance failed bitrix_id=%s start=%s end=%s", *key,
+            )
+            return {
+                "available": False, "period": period,
+                "message": "Bitrix24 временно недоступен. Повторите загрузку позже.",
+            }
+        result["employee"] = {"id": employee["id"], "name": employee["name"]}
+        _performance_cache[key] = (time.monotonic(), result)
         return result
 
     @app.post("/api/plans/{plan_id}/approve")

@@ -48,7 +48,7 @@ _worktime_cache: dict[tuple[date, date], tuple[float, dict]] = {}
 _task_cache: dict[tuple[date, date], tuple[float, dict]] = {}
 _sales_export_cache: dict[tuple[date, date], tuple[float, dict]] = {}
 _telephony_export_cache: dict[tuple[date, date], tuple[float, dict]] = {}
-_manager_stats_cache: dict[tuple[int, date], tuple[float, dict]] = {}
+_manager_stats_cache: dict[tuple[int, date, date], tuple[float, dict]] = {}
 
 
 def validate_init_data(init_data: str, bot_token: str, *, now: int | None = None) -> dict:
@@ -461,13 +461,21 @@ def _allowed_manager_ids() -> set[int]:
 
 @router.get("/api/miniapp/managers/{bitrix_user_id}/stats")
 async def mini_app_manager_stats(
-    request: Request, bitrix_user_id: int, day: date | None = None,
+    request: Request,
+    bitrix_user_id: int,
+    day: date | None = None,
+    start: date | None = None,
+    end: date | None = None,
 ) -> dict:
     _authorized_user(request)
     if bitrix_user_id not in _allowed_manager_ids():
         raise HTTPException(status_code=404, detail="Менеджер не найден")
-    selected_day = day or datetime.now(ZoneInfo("Europe/Moscow")).date()
-    key = (bitrix_user_id, selected_day)
+    today = datetime.now(ZoneInfo("Europe/Moscow")).date()
+    selected_end = end or day or today
+    selected_start = start or day or selected_end
+    if selected_start > selected_end or (selected_end - selected_start).days > 366:
+        raise HTTPException(status_code=400, detail="Выберите период не больше 367 дней")
+    key = (bitrix_user_id, selected_start, selected_end)
     cached = _manager_stats_cache.get(key)
     if cached and time.monotonic() - cached[0] < PRESENCE_CACHE_SECONDS:
         return cached[1]
@@ -487,20 +495,19 @@ async def mini_app_manager_stats(
         )
         manager = {"name": name, "status": "unknown"}
 
-    crm = PlannerCRM()
-    calls, leads = await asyncio.gather(
-        crm.call_statistics(bitrix_user_id, selected_day.isoformat()),
-        crm.processed_leads(bitrix_user_id, selected_day.isoformat()),
+    performance = await PlannerCRM().performance(
+        bitrix_user_id, selected_start.isoformat(), selected_end.isoformat(),
     )
     result = {
-        "day": selected_day.isoformat(),
+        "day": selected_end.isoformat(),
+        "period": performance["period"],
         "manager": {
             "bitrix_id": bitrix_user_id,
             "name": manager["name"],
             "status": manager.get("status", "unknown"),
         },
-        "leads": leads,
-        "calls": calls,
+        "leads": performance["leads"],
+        "calls": performance["calls"],
     }
     _manager_stats_cache[key] = (time.monotonic(), result)
     return result

@@ -31,6 +31,7 @@ const calls = (v: unknown) => object(v) && typeof v.configured === 'boolean' && 
 const leads = (v: unknown) => object(v) && number(v.processed) && object(v.stages) && Object.values(v.stages).every(number);
 const pipeline = (v: unknown) => object(v) && ['category_id','total','amount'].every(k => number(v[k])) && object(v.stages) && Object.values(v.stages).every(number);
 const crmSummary = (v: unknown) => object(v) && typeof v.available === 'boolean' && day(v.day) && optional(v.message,text) && optional(v.calls,calls) && optional(v.leads,leads) && optional(v.pipelines,x => list(x,pipeline));
+const crmPerformance = (v: unknown) => object(v) && typeof v.available === 'boolean' && object(v.period) && day(v.period.start) && day(v.period.end) && optional(v.message,text) && optional(v.calls,calls) && optional(v.leads,leads) && optional(v.employee, x => object(x) && number(x.id) && text(x.name));
 
 export function validateResponse(path: string, method: string, value: unknown): void {
   const route = path.split('?')[0];
@@ -42,6 +43,7 @@ export function validateResponse(path: string, method: string, value: unknown): 
     else if (route === '/requests') valid = list(value,request);
     else if (route === '/distributions') valid = list(value,notice);
     else if (route === '/crm/summary') valid = crmSummary(value);
+    else if (route === '/crm/performance') valid = crmPerformance(value);
     else if (/^\/plans\/\d+\/history$/.test(route)) valid = list(value,audit);
     else if (/^\/plans\/\d+(\/report)?$/.test(route)) valid = detail(value);
   } else if (/^\/plans(\/\d+\/(approve|confirm|close))?$/.test(route)) valid = detail(value);

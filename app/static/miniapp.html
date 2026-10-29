@@ -61,6 +61,13 @@
     .manager-stage { padding: 6px 9px; border-radius: 999px; background: var(--bg); color: var(--hint); font-size: 11px; }
     .manager-stage b { color: var(--text); }
     .manager-detail-status { min-height: 20px; color: var(--hint); text-align: center; font-size: 13px; }
+    .manager-period { padding: 13px; border: 1px solid var(--line); border-radius: 14px; background: var(--card); }
+    .manager-period-quick { display: flex; gap: 7px; margin-bottom: 10px; overflow-x: auto; scrollbar-width: none; }
+    .manager-period-quick button { flex: 0 0 auto; padding: 7px 10px; border: 0; border-radius: 999px; background: var(--accent-soft); color: var(--text); font: inherit; font-size: 12px; cursor: pointer; }
+    .manager-period-fields { display: grid; grid-template-columns: 1fr 1fr auto; align-items: end; gap: 8px; }
+    .manager-period-fields label { color: var(--hint); font-size: 11px; }
+    .manager-period-fields input { width: 100%; min-width: 0; margin-top: 5px; padding: 9px; border: 1px solid var(--line); border-radius: 10px; background: var(--bg); color: var(--text); font: inherit; }
+    .manager-period-fields button { min-height: 39px; padding: 9px 12px; border: 0; border-radius: 10px; background: var(--button); color: var(--button-text); font: inherit; font-weight: 700; cursor: pointer; }
     body.manager-detail-open > main > h1,
     body.manager-detail-open > main > .subtitle,
     body.manager-detail-open > main > .presence-panel,
@@ -202,6 +209,8 @@
       .period-preview { margin: 12px 4px 0; line-height: 1.45; }
       .build { width: min(100%, 280px); margin-top: 16px; }
       .manager-filter { padding: 12px; }
+      .manager-period-fields { grid-template-columns: 1fr 1fr; }
+      .manager-period-fields button { grid-column: 1 / -1; }
       .summary { gap: 8px; }
       .kpi { padding: 13px; }
       .kpi strong { font-size: 26px; }
@@ -230,6 +239,18 @@
         <div class="manager-detail-title">
           <h2 id="manager-detail-name">Менеджер</h2>
           <p id="manager-detail-meta">Статистика за сегодня</p>
+        </div>
+      </div>
+      <div class="manager-period">
+        <div class="manager-period-quick">
+          <button type="button" data-manager-period="today">Сегодня</button>
+          <button type="button" data-manager-period="week">7 дней</button>
+          <button type="button" data-manager-period="month">Этот месяц</button>
+        </div>
+        <div class="manager-period-fields">
+          <label>С<input id="manager-period-start" type="date"></label>
+          <label>По<input id="manager-period-end" type="date"></label>
+          <button id="manager-period-load" type="button">Показать</button>
         </div>
       </div>
       <div id="manager-detail-status" class="manager-detail-status"></div>
@@ -429,11 +450,15 @@
       const managerDetailMeta = document.getElementById('manager-detail-meta');
       const managerDetailStatus = document.getElementById('manager-detail-status');
       const managerDetailContent = document.getElementById('manager-detail-content');
+      const managerPeriodStart = document.getElementById('manager-period-start');
+      const managerPeriodEnd = document.getElementById('manager-period-end');
+      const managerPeriodLoad = document.getElementById('manager-period-load');
       let data = null;
       let clientsData = null;
       let tasksData = null;
       let activeReportSection = 'period';
       let activeTab = 'leads';
+      let activeManager = null;
       const selectedManagers = new Set();
 
       const iso = date => {
@@ -632,27 +657,32 @@
       function closeManagerDetail() {
         document.body.classList.remove('manager-detail-open');
         managerDetail.classList.add('hidden');
+        activeManager = null;
       }
 
-      async function openManagerDetail(manager) {
-        document.body.classList.add('manager-detail-open');
-        managerDetail.classList.remove('hidden');
-        managerDetailName.textContent = manager.name;
-        managerDetailMeta.textContent = `${presenceLabels[manager.status] || presenceLabels.unknown} · статистика за сегодня`;
+      async function loadManagerDetail() {
+        const manager = activeManager;
+        if (!manager) return;
         managerDetailContent.classList.add('hidden');
         managerDetailStatus.className = 'manager-detail-status';
         managerDetailStatus.innerHTML = '<span class="spinner"></span>Загружаю статистику…';
+        if (!managerPeriodStart.value || !managerPeriodEnd.value || managerPeriodStart.value > managerPeriodEnd.value) {
+          managerDetailStatus.className = 'manager-detail-status error';
+          managerDetailStatus.textContent = 'Проверьте выбранный период';
+          return;
+        }
         if (!manager.bitrix_id) {
           managerDetailStatus.className = 'manager-detail-status error';
           managerDetailStatus.textContent = 'Менеджер пока не привязан к Bitrix24';
           return;
         }
         try {
-          const response = await fetch(`/api/miniapp/managers/${manager.bitrix_id}/stats`, {headers: requestHeaders()});
+          const params = new URLSearchParams({start: managerPeriodStart.value, end: managerPeriodEnd.value});
+          const response = await fetch(`/api/miniapp/managers/${manager.bitrix_id}/stats?${params}`, {headers: requestHeaders()});
           if (!response.ok) throw new Error('Не удалось загрузить статистику');
           const payload = await response.json();
           managerDetailName.textContent = payload.manager.name;
-          managerDetailMeta.textContent = `${presenceLabels[payload.manager.status] || presenceLabels.unknown} · ${shortDate(payload.day)}`;
+          managerDetailMeta.textContent = `${presenceLabels[payload.manager.status] || presenceLabels.unknown} · ${shortDate(payload.period.start)} — ${shortDate(payload.period.end)}`;
           document.getElementById('manager-leads').textContent = payload.leads.processed;
           document.getElementById('manager-call-duration').textContent = aggregateDurationText(payload.calls.duration_seconds);
           document.getElementById('manager-calls').textContent = payload.calls.total;
@@ -676,7 +706,26 @@
         }
       }
 
+      async function openManagerDetail(manager) {
+        activeManager = manager;
+        document.body.classList.add('manager-detail-open');
+        managerDetail.classList.remove('hidden');
+        managerDetailName.textContent = manager.name;
+        managerDetailMeta.textContent = `${presenceLabels[manager.status] || presenceLabels.unknown} · статистика`;
+        const today = iso(new Date());
+        managerPeriodStart.value = today; managerPeriodEnd.value = today;
+        await loadManagerDetail();
+      }
+
       managerDetailBack.addEventListener('click', closeManagerDetail);
+      managerPeriodLoad.addEventListener('click', loadManagerDetail);
+      document.querySelectorAll('[data-manager-period]').forEach(button => button.addEventListener('click', () => {
+        const end = new Date(); const start = new Date(end);
+        if (button.dataset.managerPeriod === 'week') start.setDate(start.getDate() - 6);
+        if (button.dataset.managerPeriod === 'month') start.setDate(1);
+        managerPeriodStart.value = iso(start); managerPeriodEnd.value = iso(end);
+        void loadManagerDetail();
+      }));
 
       function renderPresence(payload) {
         presenceList.replaceChildren();

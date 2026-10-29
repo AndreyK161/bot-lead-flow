@@ -115,6 +115,38 @@ class PlannerCRMTests(unittest.IsolatedAsyncioTestCase):
         result = await self.crm.processed_leads(110, '2026-10-21')
         self.assertEqual(result['stages'], {'Недозвон': 1})
 
+    async def test_performance_aggregates_inclusive_period(self):
+        self.client.get_lead_statuses.return_value = [
+            {"STATUS_ID": "IN_PROCESS", "NAME": "Недозвон"},
+        ]
+        for lead_id, processed_at in (
+            ('period-1', '2026-10-20T10:00:00+03:00'),
+            ('period-2', '2026-10-22T18:00:00+03:00'),
+        ):
+            store.execute(
+                """INSERT INTO crm_items(
+                   entity_type,entity_id,created_date,current_stage_id,current_stage_name,
+                   current_assignee_id,processed_at,processed_by_id,first_seen_at,updated_at)
+                   VALUES(?,?,?,?,?,?,?,?,?,?)""",
+                ('lead', lead_id, '2026-10-20', 'IN_PROCESS', 'IN_PROCESS', '110',
+                 processed_at, '110', processed_at, processed_at),
+            )
+        for call_id, started_at, duration in (
+            ('period-call-1', '2026-10-20T08:00:00+00:00', 120),
+            ('period-call-2', '2026-10-22T14:00:00+00:00', 240),
+        ):
+            store.execute(
+                """INSERT INTO megafon_calls(
+                   call_id,manager_extension,direction,client_phone,started_at,
+                   duration_seconds,call_status) VALUES(?,?,?,?,?,?,?)""",
+                (call_id, '101', 'out', '9990000000', started_at, duration, 'Success'),
+            )
+        result = await self.crm.performance(110, '2026-10-20', '2026-10-22')
+        self.assertEqual(result['period'], {'start': '2026-10-20', 'end': '2026-10-22'})
+        self.assertEqual(result['leads'], {'processed': 2, 'stages': {'Недозвон': 2}})
+        self.assertEqual(result['calls']['total'], 2)
+        self.assertEqual(result['calls']['duration_seconds'], 360)
+
 
 if __name__ == '__main__':
     unittest.main()

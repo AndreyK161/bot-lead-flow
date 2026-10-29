@@ -188,6 +188,9 @@ class MiniAppReportTests(unittest.TestCase):
         self.assertIn("/api/miniapp/telephony.xlsx", html)
         self.assertIn('id="presence-list"', html)
         self.assertIn("/api/miniapp/managers/presence", html)
+        self.assertIn('id="manager-period-start"', html)
+        self.assertIn('id="manager-period-end"', html)
+        self.assertIn("/stats?${params}", html)
         self.assertIn("window.setInterval(loadPresence, 60000)", html)
 
     def test_presence_payload_normalizes_statuses(self):
@@ -262,11 +265,15 @@ class MiniAppReportJobTests(unittest.IsolatedAsyncioTestCase):
 class MiniAppManagerStatsTests(unittest.IsolatedAsyncioTestCase):
     async def test_returns_leads_and_calls_for_selected_manager(self):
         crm = SimpleNamespace(
-            call_statistics=lambda *_: _async_value({
-                "configured": True, "total": 7, "outbound": 6, "answered": 5,
-                "long_calls": 2, "duration_seconds": 900,
+            performance=lambda _user, start, end: _async_value({
+                "available": True,
+                "period": {"start": start, "end": end},
+                "calls": {
+                    "configured": True, "total": 7, "outbound": 6, "answered": 5,
+                    "long_calls": 2, "duration_seconds": 900,
+                },
+                "leads": {"processed": 4, "stages": {"Квалифицирован": 4}},
             }),
-            processed_leads=lambda *_: _async_value({"processed": 4, "stages": {"Квалифицирован": 4}}),
         )
         presence = {
             "managers": [{"bitrix_id": 50, "name": "Евгений Гринёв", "status": "working"}],
@@ -278,8 +285,11 @@ class MiniAppManagerStatsTests(unittest.IsolatedAsyncioTestCase):
             patch("app.miniapp._manager_presence_payload", return_value=presence),
             patch("app.miniapp.PlannerCRM", return_value=crm),
         ):
-            result = await miniapp.mini_app_manager_stats(None, 50, date(2026, 10, 28))
+            result = await miniapp.mini_app_manager_stats(
+                None, 50, start=date(2026, 10, 22), end=date(2026, 10, 28),
+            )
         self.assertEqual(result["manager"]["name"], "Евгений Гринёв")
+        self.assertEqual(result["period"], {"start": "2026-10-22", "end": "2026-10-28"})
         self.assertEqual(result["leads"]["processed"], 4)
         self.assertEqual(result["calls"]["duration_seconds"], 900)
 

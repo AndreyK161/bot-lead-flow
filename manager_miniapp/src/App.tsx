@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type FormEvent, type ReactNode } from 'react';
 import { api } from './api';
-import type { Audit, Client, CrmSummary, Employee, GoalRequest, Me, Plan, Task } from './types';
+import type { Audit, Client, CrmPerformance, CrmSummary, Employee, GoalRequest, Me, Plan, Task } from './types';
 
 const kindName = { quantitative: 'План / факт', general: 'Задача', client: 'По клиенту', bitrix: 'Bitrix24' };
 const statusName = { todo: 'К выполнению', in_progress: 'В работе', done: 'Выполнена', moved: 'Перенесена', draft: 'Черновик', approved: 'Подтверждён', closed: 'День закрыт', pending: 'Ожидает решения', rejected: 'Отклонён', cancelled: 'Отменён' };
@@ -48,6 +48,11 @@ export default function App({ client = api, demo = false }: { client?: Client; d
   const [requests, setRequests] = useState<GoalRequest[]>([]);
   const [distributions, setDistributions] = useState<Array<{ id: string; day?: string; employee_id?: number; employee_name: string; status: string; reason: string; count: number | null; dates: string[] }>>([]);
   const [crm, setCrm] = useState<CrmSummary>();
+  const [performance, setPerformance] = useState<CrmPerformance>();
+  const [profileStart, setProfileStart] = useState('');
+  const [profileEnd, setProfileEnd] = useState('');
+  const [profileLoading, setProfileLoading] = useState(false);
+  const [profileError, setProfileError] = useState('');
   const [audit, setAudit] = useState<Audit[]>([]);
   const [error, setError] = useState('');
   const [toast, setToast] = useState('');
@@ -70,7 +75,7 @@ export default function App({ client = api, demo = false }: { client?: Client; d
     let alive = true;
     client<Me>('/me').then(value => {
       if (!alive) return;
-      setMe(value); setDay(value.today);
+      setMe(value); setDay(value.today); setProfileStart(value.today); setProfileEnd(value.today);
       if (value.user.role === 'manager') setEmployeeId(value.user.id);
     }).catch(e => { if (alive) { setError(e.message); setLoading(false); } });
     return () => { alive = false; };
@@ -154,6 +159,19 @@ export default function App({ client = api, demo = false }: { client?: Client; d
   }, [refresh, me, modal, busy, loading]);
   useEffect(() => { if (!toast) return; const id = setTimeout(() => setToast(''), 4000); return () => clearTimeout(id); }, [toast]);
 
+  const loadPerformance = useCallback(async () => {
+    if (!me || supervisor || !profileStart || !profileEnd) return;
+    if (profileStart > profileEnd) { setProfileError('Дата начала не может быть позже даты окончания.'); return; }
+    setProfileLoading(true); setProfileError('');
+    try {
+      const params = new URLSearchParams({ start: profileStart, end: profileEnd });
+      setPerformance(await client<CrmPerformance>(`/crm/performance?${params}`));
+    } catch (e) { setProfileError((e as Error).message); }
+    finally { setProfileLoading(false); }
+  }, [client, me, supervisor, profileStart, profileEnd]);
+
+  useEffect(() => { if (section === 'profile') void loadPerformance(); }, [section, loadPerformance]);
+
   async function act(path: string, method = 'POST', data?: unknown, message = 'Сохранено') {
     if (busy || view !== currentView.current) return;
     const operationView = view;
@@ -181,7 +199,7 @@ export default function App({ client = api, demo = false }: { client?: Client; d
   const selectedTasks = tasks.filter(t => filter === 'all' || t.status === filter);
   const elapsed = (t: Task) => t.actual_seconds + (t.timer_started ? Math.max(0, Math.floor((now + offset) / 1000) - t.timer_started) : 0);
   const pending = requests.filter(r => r.status === 'pending').length;
-  const tabs = supervisor ? [['home', 'Обзор отдела'], ['people', 'Сотрудники'], ['plan', 'Планы'], ['results', 'Прогресс'], ['requests', 'Согласования'], ['history', 'История'], ['reports', 'Отчёты']] : [['home', 'Главная'], ['plan', 'Мой план'], ['tasks', 'Задачи'], ['results', 'Мои результаты'], ['history', 'История']];
+  const tabs = supervisor ? [['home', 'Обзор отдела'], ['people', 'Сотрудники'], ['plan', 'Планы'], ['results', 'Прогресс'], ['requests', 'Согласования'], ['history', 'История'], ['reports', 'Отчёты']] : [['home', 'Главная'], ['profile', 'Мой профиль'], ['plan', 'Мой план'], ['tasks', 'Задачи'], ['results', 'Мои результаты'], ['history', 'История']];
 
   if (!me) return <div className="welcome"><div className="brand-mark"><Icon name="plan" size={32}/></div><p className="eyebrow">ОТДЕЛ ПРОДАЖ</p><h1>Хороший день<br/>начинается с плана.</h1><p>{loading ? 'Открываем ваше рабочее пространство…' : error}</p>{!loading && <button onClick={() => window.location.reload()}>Попробовать снова</button>}<span className="muted">Планы, задачи и результаты — в одном месте</span></div>;
 
@@ -192,6 +210,20 @@ export default function App({ client = api, demo = false }: { client?: Client; d
   </div>;
   const rubles = (value: number) => new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(value);
   const renderCrm = () => crm && <section className="card crm-summary"><div className="section-heading"><h3>Обработка лидов и звонки</h3><span className="badge">Только чтение</span></div>{!crm.available ? <p className="notice">{crm.message}</p> : <div className="crm-grid"><div><span>Обработано лидов</span><strong>{crm.leads?.processed || 0}</strong><small>{crm.leads && Object.entries(crm.leads.stages).length ? Object.entries(crm.leads.stages).map(([stage, count]) => `${stage}: ${count}`).join(' · ') : 'Первый выход из стадии «Не обработан»'}</small></div><div><span>Звонков за день</span><strong>{crm.calls?.total || 0}</strong><small>Исходящих: {crm.calls?.outbound || 0} · дозвоны: {crm.calls?.answered || 0} · от 3 минут: {crm.calls?.long_calls || 0}</small>{crm.calls && !crm.calls.configured && <small>Нет привязки номера МегаФона</small>}</div><div><span>Общая длительность</span><strong>{minutes(crm.calls?.duration_seconds || 0)}</strong><small>Сумма состоявшихся исходящих звонков</small></div>{(crm.pipelines || []).map(p => <div key={p.category_id}><span>{p.category_id === 0 ? 'Сделки · Продажи' : `Сделки · Категория ${p.category_id}`}</span><strong>{p.total}</strong><small>Сумма: {rubles(p.amount)}</small></div>)}</div>}</section>;
+  const setProfilePreset = (preset: 'today' | 'week' | 'month') => {
+    const end = new Date(`${me.today}T12:00:00+03:00`);
+    const start = new Date(end);
+    if (preset === 'week') start.setDate(start.getDate() - 6);
+    if (preset === 'month') start.setDate(1);
+    const value = (date: Date) => date.toLocaleDateString('sv-SE', { timeZone: 'Europe/Moscow' });
+    setProfileStart(value(start)); setProfileEnd(value(end));
+  };
+  const renderProfile = () => <>
+    <section className="card profile-hero"><div className="row"><div className="avatar profile-avatar">{me.user.name[0]}</div><div><p className="eyebrow">ЛИЧНАЯ СТАТИСТИКА</p><h2>{me.user.name}</h2><p className="muted">Данные по обработке лидов и звонкам</p></div></div></section>
+    <section className="card period-card"><div className="section-heading"><h3>Период</h3><span className="badge">Москва</span></div><div className="period-presets"><button className="secondary" onClick={() => setProfilePreset('today')}>Сегодня</button><button className="secondary" onClick={() => setProfilePreset('week')}>7 дней</button><button className="secondary" onClick={() => setProfilePreset('month')}>Этот месяц</button></div><div className="period-fields"><label>С<input type="date" value={profileStart} onChange={e => setProfileStart(e.target.value)}/></label><label>По<input type="date" value={profileEnd} onChange={e => setProfileEnd(e.target.value)}/></label><button onClick={() => void loadPerformance()} disabled={profileLoading}>Показать</button></div></section>
+    {profileError && <p className="error" role="alert">{profileError}</p>}
+    {profileLoading ? <div className="empty"><div className="spinner"/><p>Загружаем статистику…</p></div> : performance && (!performance.available ? <p className="notice">{performance.message}</p> : <><div className="profile-stats"><article className="card"><span>Обработано лидов</span><strong>{performance.leads?.processed || 0}</strong></article><article className="card"><span>Общая длительность</span><strong>{minutes(performance.calls?.duration_seconds || 0)}</strong></article><article className="card"><span>Всего звонков</span><strong>{performance.calls?.total || 0}</strong></article><article className="card"><span>Исходящих</span><strong>{performance.calls?.outbound || 0}</strong></article><article className="card"><span>Успешных</span><strong>{performance.calls?.answered || 0}</strong></article><article className="card"><span>Дольше 3 минут</span><strong>{performance.calls?.long_calls || 0}</strong></article></div><section className="card stage-summary"><div className="section-heading"><h3>Стадии обработанных лидов</h3><span className="muted">{dateLabel(performance.period.start)} — {dateLabel(performance.period.end)}</span></div><div className="stage-chips">{Object.entries(performance.leads?.stages || {}).map(([stage, count]) => <span key={stage}>{stage} <b>{count}</b></span>)}{!Object.keys(performance.leads?.stages || {}).length && <p className="muted">За выбранный период обработанных лидов нет.</p>}</div></section></>)}
+  </>;
   const renderHistory = () => <section className="card audit"><h3>История изменений</h3>{audit.length === 0 && <p className="muted">{loadErrors.history ? 'История не загружена. Повторите загрузку выше.' : 'Изменений пока нет.'}</p>}{audit.map(a => <article key={a.id}>
     <div><strong>{actionName[a.action] || 'Изменение'}</strong><small>{a.actor_name} · {new Date(a.created_at * 1000).toLocaleString('ru-RU', { timeZone: 'Europe/Moscow' })}</small></div>
     {a.entity === 'task' && <p>{String(a.after_json?.title || a.before_json?.title || `Задача №${a.entity_id}`)}</p>}
@@ -229,14 +261,14 @@ export default function App({ client = api, demo = false }: { client?: Client; d
 
   return <div className="shell">
     {import.meta.env.DEV && demo && <div className="demo-banner">ДЕМОНСТРАЦИЯ · Пример интерфейса, данные вымышлены · <a href="/preview.html?role=manager">Менеджер</a> / <a href="/preview.html?role=supervisor">Руководитель</a></div>}
-    <div className="workspace"><aside className="sidebar"><button className="brand" onClick={() => setSection('home')}><span className="brand-mark">П</span><span><b>План дня</b><small>РАБОЧЕЕ ПРОСТРАНСТВО</small></span></button><p className="nav-caption">{supervisor ? 'УПРАВЛЕНИЕ ОТДЕЛОМ' : 'ЛИЧНЫЙ КАБИНЕТ'}</p><nav aria-label="Разделы">{tabs.map(([key, title]) => <button key={key} className={section === key ? 'active' : ''} onClick={() => { setSection(key); setShowAudit(false); }}><Icon name={key === 'reports' ? 'results' : key}/><span>{title}</span>{key === 'requests' && pending > 0 && <em>{pending}</em>}</button>)}</nav><div className="sidebar-bottom"><span className="connection-dot"/>Lead Flow подключён<small>{me.crm.connected ? 'Bitrix24 и телефония доступны' : me.crm.message}</small></div><div className="profile"><div className="avatar">{me.user.name[0]}</div><div><b>{me.user.name}</b><span>{supervisor ? 'Руководитель' : 'Менеджер'}</span></div></div></aside>
+    <div className="workspace"><aside className="sidebar"><button className="brand" onClick={() => setSection('home')}><span className="brand-mark">П</span><span><b>План дня</b><small>РАБОЧЕЕ ПРОСТРАНСТВО</small></span></button><p className="nav-caption">{supervisor ? 'УПРАВЛЕНИЕ ОТДЕЛОМ' : 'ЛИЧНЫЙ КАБИНЕТ'}</p><nav aria-label="Разделы">{tabs.map(([key, title]) => <button key={key} className={section === key ? 'active' : ''} onClick={() => { setSection(key); setShowAudit(false); }}><Icon name={key === 'reports' ? 'results' : key === 'profile' ? 'people' : key}/><span>{title}</span>{key === 'requests' && pending > 0 && <em>{pending}</em>}</button>)}</nav><div className="sidebar-bottom"><span className="connection-dot"/>Lead Flow подключён<small>{me.crm.connected ? 'Bitrix24 и телефония доступны' : me.crm.message}</small></div><button className="profile" onClick={() => !supervisor && setSection('profile')}><div className="avatar">{me.user.name[0]}</div><div><b>{me.user.name}</b><span>{supervisor ? 'Руководитель' : 'Менеджер · открыть профиль'}</span></div></button></aside>
     <div className="main-shell"><header className="topbar"><span>Рабочее пространство <span className="crumb">/ {tabs.find(t => t[0] === section)?.[1]}</span></span><div><span className="top-date">{dateLabel(me.today)}</span><span className="avatar small">{me.user.name[0]}</span></div></header><main className="page-content">
-      <div className="page-title"><div><p className="eyebrow">{supervisor ? 'КОМАНДА И РЕЗУЛЬТАТ' : 'РАБОЧЕЕ ПРОСТРАНСТВО'}</p><h1>{tabs.find(t => t[0] === section)?.[1]}</h1></div><button className="quiet" disabled={busy || loading} onClick={() => refresh().catch(e => setError(e.message))}>Обновить</button></div>
+      <div className="page-title"><div><p className="eyebrow">{supervisor ? 'КОМАНДА И РЕЗУЛЬТАТ' : 'РАБОЧЕЕ ПРОСТРАНСТВО'}</p><h1>{tabs.find(t => t[0] === section)?.[1]}</h1></div><button className="quiet" disabled={busy || loading || profileLoading} onClick={() => section === 'profile' ? void loadPerformance() : refresh().catch(e => setError(e.message))}>Обновить</button></div>
       {error && <div className="error" role="alert">{error}<button className="icon-button" aria-label="Закрыть ошибку" onClick={() => setError('')}><Icon name="close"/></button></div>}
       {Object.entries(loadErrors).map(([key, message]) => <div className="error" role="alert" key={key}><span>{({ employees: 'Сотрудники', plans: 'Планы', requests: 'Согласования', distributions: 'Уведомления', history: 'История', crm: 'Bitrix24 и звонки' } as Record<string, string>)[key]}: {message}</span><button className="secondary" onClick={() => void refresh(key)}>Повторить загрузку</button></div>)}
       {toast && <div className="toast" role="status"><Icon name="check"/>{toast}</div>}
 
-      {section === 'home' ? renderDashboard() : section === 'people' && supervisor ? <>
+      {section === 'home' ? renderDashboard() : section === 'profile' && !supervisor ? renderProfile() : section === 'people' && supervisor ? <>
         <section className="hero"><p className="eyebrow">ВМЕСТЕ К ЦЕЛИ</p><h2>У каждого — ясный план.<br/>У вас — общая картина.</h2><p>{employeesLoaded ? `${employees.filter(e => e.active).length} сотрудника в команде` : loadErrors.employees ? 'Сотрудники не загружены' : 'Загрузка сотрудников'}</p><button className="light" onClick={() => setModal({ type: 'employee' })}><Icon name="plus"/>Добавить сотрудника</button></section>
         <div className="section-heading"><h2>Команда</h2><span className="muted">{dateLabel(me.today)}</span></div>
         <div className="employee-grid">{employees.map(e => <section className="card employee" key={e.id}><div className="row"><div className="avatar">{e.name[0]}</div><div><h3>{e.name}</h3><span className="muted">{!e.active ? 'Доступ выключен' : e.telegram_id ? 'Менеджер' : 'Ожидает подключения Telegram'}</span></div></div><div className="actions"><button className="secondary" onClick={() => { setEmployeeId(e.id); setDay(me.today); setSection('plan'); }}>Открыть план <Icon name="arrow"/></button><button className="quiet" onClick={() => setModal({ type: 'employee', employee: e })}>Изменить</button></div></section>)}</div>

@@ -29,6 +29,12 @@ export interface CrmSummary {
   leads?: { processed: number; stages: Record<string, number> };
   pipelines?: Array<{ category_id: number; total: number; amount: number; stages: Record<string, number> }>;
 }
+export interface CrmPerformance {
+  available: boolean; period: { start: string; end: string }; message?: string;
+  employee?: { id: number; name: string };
+  calls?: { configured: boolean; total: number; outbound: number; answered: number; long_calls: number; duration_seconds: number };
+  leads?: { processed: number; stages: Record<string, number> };
+}
 export interface TelegramApp {
   initData: string; colorScheme: 'light' | 'dark'; ready(): void; expand(): void;
   onEvent(event: string, callback: () => void): void; offEvent(event: string, callback: () => void): void;

@@ -35,7 +35,10 @@ class ExternalTask:
 class ReadOnlyCRM(Protocol):
     async def tasks(self, bitrix_user_id: int, day: str) -> list[ExternalTask]: ...
     async def call_statistics(self, bitrix_user_id: int, day: str, long_call_seconds: int = 180) -> dict: ...
+    async def call_statistics_period(self, bitrix_user_id: int, start: str, end: str, long_call_seconds: int = 180) -> dict: ...
     async def processed_leads(self, bitrix_user_id: int, day: str) -> dict: ...
+    async def processed_leads_period(self, bitrix_user_id: int, start: str, end: str) -> dict: ...
+    async def performance(self, bitrix_user_id: int, start: str, end: str) -> dict: ...
     async def deals(self, bitrix_user_id: int, category_id: int) -> list[dict]: ...
 
 
@@ -93,11 +96,21 @@ class PlannerCRM:
     async def call_statistics(
         self, bitrix_user_id: int, day: str, long_call_seconds: int = 180,
     ) -> dict:
+        return await self.call_statistics_period(
+            bitrix_user_id, day, day, long_call_seconds,
+        )
+
+    async def call_statistics_period(
+        self, bitrix_user_id: int, start: str, end: str, long_call_seconds: int = 180,
+    ) -> dict:
         settings = get_settings()
         zone = ZoneInfo(settings.daily_stats_timezone)
-        selected_day = date.fromisoformat(day)
-        start = datetime.combine(selected_day, time.min, zone).astimezone(ZoneInfo("UTC"))
-        end = (datetime.combine(selected_day, time.min, zone) + timedelta(days=1)).astimezone(ZoneInfo("UTC"))
+        first_day = date.fromisoformat(start)
+        last_day = date.fromisoformat(end)
+        if first_day > last_day:
+            raise ValueError("Начало периода не может быть позже окончания")
+        start_at = datetime.combine(first_day, time.min, zone).astimezone(ZoneInfo("UTC"))
+        end_at = (datetime.combine(last_day, time.min, zone) + timedelta(days=1)).astimezone(ZoneInfo("UTC"))
         extensions = [
             str(extension) for extension, user_id in settings.megafon_bitrix_users.items()
             if str(user_id) == str(bitrix_user_id)
@@ -111,7 +124,7 @@ class PlannerCRM:
         calls = store.rows(
             f"""SELECT direction,call_status,duration_seconds FROM megafon_calls
                 WHERE manager_extension IN ({placeholders}) AND started_at>=? AND started_at<?""",
-            (*extensions, start.isoformat(), end.isoformat()),
+            (*extensions, start_at.isoformat(), end_at.isoformat()),
         )
         outgoing = [
             call for call in calls
@@ -137,8 +150,15 @@ class PlannerCRM:
 
     async def processed_leads(self, bitrix_user_id: int, day: str) -> dict:
         """Count each lead once, on its first exit from the unprocessed stage."""
+        return await self.processed_leads_period(bitrix_user_id, day, day)
+
+    async def processed_leads_period(self, bitrix_user_id: int, start: str, end: str) -> dict:
+        """Count each lead once in an inclusive Moscow-date range."""
         timezone = ZoneInfo(get_settings().daily_stats_timezone)
-        selected_day = date.fromisoformat(day)
+        first_day = date.fromisoformat(start)
+        last_day = date.fromisoformat(end)
+        if first_day > last_day:
+            raise ValueError("Начало периода не может быть позже окончания")
         statuses = await self.client.get_lead_statuses()
         stage_names = {
             str(item.get("STATUS_ID") or ""): str(item.get("NAME") or "")
@@ -154,7 +174,7 @@ class PlannerCRM:
         selected = []
         for row in rows:
             processed_at = _datetime(row.get("processed_at"))
-            if processed_at and processed_at.astimezone(timezone).date() == selected_day:
+            if processed_at and first_day <= processed_at.astimezone(timezone).date() <= last_day:
                 selected.append(row)
         stages: dict[str, int] = {}
         for row in selected:
@@ -162,6 +182,18 @@ class PlannerCRM:
             stage = stage_names.get(stage_id) or str(row.get("current_stage_name") or "Без стадии")
             stages[stage] = stages.get(stage, 0) + 1
         return {"processed": len(selected), "stages": stages}
+
+    async def performance(self, bitrix_user_id: int, start: str, end: str) -> dict:
+        calls, leads = await asyncio.gather(
+            self.call_statistics_period(bitrix_user_id, start, end),
+            self.processed_leads_period(bitrix_user_id, start, end),
+        )
+        return {
+            "available": True,
+            "period": {"start": start, "end": end},
+            "calls": calls,
+            "leads": leads,
+        }
 
     async def summary(self, bitrix_user_id: int, day: str) -> dict:
         calls, leads, category_zero, category_two = await asyncio.gather(
