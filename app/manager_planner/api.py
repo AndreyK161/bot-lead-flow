@@ -8,9 +8,9 @@ import time
 from datetime import date
 from pathlib import Path
 
-from fastapi import Body, Depends, FastAPI, Header, HTTPException
+from fastapi import Body, Cookie, Depends, FastAPI, Header, HTTPException, Request
 from fastapi.exceptions import RequestValidationError
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 import httpx
 
@@ -29,6 +29,7 @@ _crm_cache: dict[tuple[int, str], tuple[float, dict]] = {}
 _performance_cache: dict[tuple[int, str, str], tuple[float, dict]] = {}
 _web_identity_cache: dict[str, tuple[float, dict]] = {}
 WEB_IDENTITY_CACHE_SECONDS = 15
+TELEGRAM_SESSION_COOKIE = "planner_telegram_session"
 
 
 static_path = Path(__file__).resolve().parent.parent / "static" / "manager"
@@ -93,10 +94,14 @@ def create_app() -> FastAPI:
 
     @app.get("/api/auth/telegram/config")
     async def telegram_auth_config():
-        username = get_settings().telegram_bot_username.strip().lstrip("@")
+        settings = get_settings()
+        username = settings.telegram_bot_username.strip().lstrip("@")
         if not username:
             raise HTTPException(503, "Вход через Telegram пока не настроен.")
-        return {"bot_username": username}
+        return {
+            "bot_username": username,
+            "auth_url": settings.planner_public_url.rstrip("/") + "/manager/api/auth/telegram/callback",
+        }
 
     @app.post("/api/auth/telegram")
     async def telegram_auth(payload: dict = Body(...)):
@@ -118,7 +123,34 @@ def create_app() -> FastAPI:
             "expires_in": settings.telegram_web_session_seconds,
         }
 
-    async def actor(authorization: str | None = Header(default=None)):
+    @app.get("/api/auth/telegram/callback")
+    async def telegram_auth_callback(request: Request):
+        settings = get_settings()
+        payload = dict(request.query_params)
+        try:
+            telegram_id = validate_login_widget(
+                payload, settings.telegram_bot_token,
+                max_age=settings.telegram_login_max_age_seconds,
+            )
+            telegram_actor(telegram_id)
+        except (InvalidTelegramLogin, HTTPException):
+            return RedirectResponse("/manager/?telegram_error=auth", status_code=303)
+        session = issue_web_session(
+            telegram_id, settings.telegram_bot_token,
+            ttl=settings.telegram_web_session_seconds,
+        )
+        response = RedirectResponse("/manager/", status_code=303)
+        response.set_cookie(
+            TELEGRAM_SESSION_COOKIE, session,
+            max_age=settings.telegram_web_session_seconds,
+            httponly=True, secure=True, samesite="lax", path="/manager",
+        )
+        return response
+
+    async def actor(
+        authorization: str | None = Header(default=None),
+        telegram_session: str | None = Cookie(default=None, alias=TELEGRAM_SESSION_COOKIE),
+    ):
         settings = get_settings()
         if authorization and authorization.startswith("tma "):
             try:
@@ -129,6 +161,12 @@ def create_app() -> FastAPI:
         if authorization and authorization.startswith("tgweb "):
             try:
                 telegram_id = validate_web_session(authorization[6:].strip(), settings.telegram_bot_token)
+            except InvalidTelegramLogin as exc:
+                raise HTTPException(401, str(exc)) from None
+            return telegram_actor(telegram_id)
+        if telegram_session:
+            try:
+                telegram_id = validate_web_session(telegram_session, settings.telegram_bot_token)
             except InvalidTelegramLogin as exc:
                 raise HTTPException(401, str(exc)) from None
             return telegram_actor(telegram_id)
@@ -183,6 +221,16 @@ def create_app() -> FastAPI:
         user["web_user_id"] = int(web_user.get("id") or 0)
         user["auth_transport"] = "web"
         return user
+
+    @app.get("/api/auth/telegram/session")
+    async def telegram_auth_session(user=Depends(actor)):
+        return {"authenticated": True, "telegram_id": user.get("telegram_id")}
+
+    @app.post("/api/auth/logout")
+    async def auth_logout():
+        response = JSONResponse({"ok": True})
+        response.delete_cookie(TELEGRAM_SESSION_COOKIE, path="/manager")
+        return response
 
     async def sync_plan_tasks(user: dict, plan: dict) -> None:
         if plan["status"] == "closed":

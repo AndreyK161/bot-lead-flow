@@ -66,8 +66,11 @@ def validate_login_widget(payload: dict, token: str, max_age: int = 600, now: in
         current = int(time.time()) if now is None else now
         if timestamp > current + 30 or current - timestamp > max_age:
             raise ValueError()
-        user_id = fields["id"]
-        if type(user_id) is not int or not 0 < user_id < 2**63:
+        raw_user_id = fields["id"]
+        if isinstance(raw_user_id, bool) or not str(raw_user_id).isdigit():
+            raise ValueError()
+        user_id = int(raw_user_id)
+        if not 0 < user_id < 2**63:
             raise ValueError()
         return user_id
     except (ValueError, KeyError, TypeError, OverflowError):

@@ -122,6 +122,7 @@ class Settings(BaseSettings):
     leadflow_web_auth_url: str = ""
     leadflow_web_auth_timeout_seconds: float = 5.0
     telegram_bot_username: str = "lead_notification_prav_buro_bot"
+    planner_public_url: str = "https://flow.prav-buro.ru"
     telegram_login_max_age_seconds: int = 600
     telegram_web_session_seconds: int = 43200
     mode_switch_user_id: int = 1297686797

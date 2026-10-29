@@ -24,6 +24,7 @@ assert(api.includes("WEB_TOKEN_KEY = 'access_token'"), 'shared Lead Flow web tok
 assert(api.includes("'/api/v1/auth/login'"), 'web login does not use Lead Flow auth');
 assert(api.includes("'/manager/api/auth/telegram'"), 'Telegram web login is missing');
 assert(main.includes('telegram-widget.js'), 'Telegram Login Widget is missing');
+assert(main.includes("data-auth-url"), 'Telegram redirect callback is missing');
 assert(api.includes("'/manager/api/auth/telegram'"), 'Telegram web login is missing');
 assert(main.includes('telegram-widget.js'), 'Telegram Login Widget is missing');
 assert(main.includes('Рабочее пространство отдела продаж'), 'desktop web login is missing');

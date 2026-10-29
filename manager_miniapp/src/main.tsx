@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, type FormEvent } from 'react';
 import { createRoot } from 'react-dom/client';
 import App from './App';
-import { hasWebSession, isTelegramSession, telegramLogin, telegramLoginConfig, webLogin, type TelegramLoginPayload } from './api';
+import { hasTelegramCookieSession, hasWebSession, isTelegramSession, telegramLoginConfig, webLogin } from './api';
 import './style.css';
 
 const webapp = window.Telegram?.WebApp;
@@ -17,13 +17,8 @@ function WebLogin() {
   const telegramMount = useRef<HTMLDivElement>(null);
   useEffect(() => {
     let active = true;
-    telegramLoginConfig().then(({ bot_username }) => {
+    telegramLoginConfig().then(({ bot_username, auth_url }) => {
       if (!active || !telegramMount.current) return;
-      window.onTelegramAuth = async (user: TelegramLoginPayload) => {
-        setBusy(true); setError('');
-        try { await telegramLogin(user); window.location.reload(); }
-        catch (reason) { setError((reason as Error).message); setBusy(false); }
-      };
       const script = document.createElement('script');
       script.src = 'https://telegram.org/js/telegram-widget.js?22';
       script.async = true;
@@ -31,10 +26,10 @@ function WebLogin() {
       script.setAttribute('data-size', 'large');
       script.setAttribute('data-radius', '8');
       script.setAttribute('data-request-access', 'write');
-      script.setAttribute('data-onauth', 'onTelegramAuth(user)');
+      script.setAttribute('data-auth-url', auth_url);
       telegramMount.current.replaceChildren(script);
     }).catch(() => undefined);
-    return () => { active = false; delete window.onTelegramAuth; };
+    return () => { active = false; };
   }, []);
   const submit = async (event: FormEvent) => {
     event.preventDefault(); setBusy(true); setError('');
@@ -45,8 +40,15 @@ function WebLogin() {
   return <main className="web-login"><section className="web-login-brand"><div className="brand-mark">П</div><p className="eyebrow">LEAD FLOW · ПЛАН ДНЯ</p><h1>Рабочее пространство отдела продаж</h1><p>Планы, задачи, показатели и обзвон клиентов — в едином интерфейсе.</p></section><section className="web-login-panel"><div className="web-login-box"><p className="eyebrow">ДОБРО ПОЖАЛОВАТЬ</p><h2>Вход в систему</h2><p className="muted">Быстрый вход через рабочий Telegram</p><div className="telegram-login" ref={telegramMount}>{busy && <span>Подтверждаем вход…</span>}</div><div className="login-divider"><span>или по рабочей учётной записи</span></div><form onSubmit={submit}><label>Email<input type="email" autoComplete="username" value={email} onChange={event => setEmail(event.target.value)} required/></label><label>Пароль<input type="password" autoComplete="current-password" value={password} onChange={event => setPassword(event.target.value)} required/></label>{error && <p className="error" role="alert">{error}</p>}<button disabled={busy}>{busy ? 'Входим…' : 'Войти →'}</button></form></div></section></main>;
 }
 
-declare global { interface Window { onTelegramAuth?: (user: TelegramLoginPayload) => void } }
+function Root() {
+  const immediate = isTelegramSession() || hasWebSession();
+  const [authenticated, setAuthenticated] = useState<boolean | null>(immediate ? true : null);
+  useEffect(() => {
+    if (authenticated !== null) return;
+    hasTelegramCookieSession().then(setAuthenticated);
+  }, [authenticated]);
+  if (authenticated === null) return <main className="session-loading"><span>Проверяем вход…</span></main>;
+  return authenticated ? <App /> : <WebLogin />;
+}
 
-createRoot(document.getElementById('root')!).render(
-  isTelegramSession() || hasWebSession() ? <App /> : <WebLogin />,
-);
+createRoot(document.getElementById('root')!).render(<Root />);

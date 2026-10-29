@@ -27,11 +27,18 @@ export async function telegramLogin(payload: TelegramLoginPayload): Promise<void
   localStorage.removeItem(WEB_TOKEN_KEY);
 }
 
-export async function telegramLoginConfig(): Promise<{ bot_username: string }> {
+export async function telegramLoginConfig(): Promise<{ bot_username: string; auth_url: string }> {
   const response = await fetch('/manager/api/auth/telegram/config', { cache: 'no-store' });
   const body = await response.json().catch(() => null);
-  if (!response.ok || typeof body?.bot_username !== 'string') throw new Error('Вход через Telegram пока недоступен.');
+  if (!response.ok || typeof body?.bot_username !== 'string' || typeof body?.auth_url !== 'string') throw new Error('Вход через Telegram пока недоступен.');
   return body;
+}
+
+export async function hasTelegramCookieSession(): Promise<boolean> {
+  try {
+    const response = await fetch('/manager/api/auth/telegram/session', { cache: 'no-store' });
+    return response.ok;
+  } catch { return false; }
 }
 
 export async function webLogin(email: string, password: string): Promise<void> {
@@ -49,7 +56,8 @@ export async function webLogin(email: string, password: string): Promise<void> {
   localStorage.removeItem(TELEGRAM_WEB_TOKEN_KEY);
 }
 
-export function webLogout(): void {
+export async function webLogout(): Promise<void> {
+  await fetch('/manager/api/auth/logout', { method: 'POST', cache: 'no-store' }).catch(() => undefined);
   localStorage.removeItem(WEB_TOKEN_KEY);
   localStorage.removeItem(TELEGRAM_WEB_TOKEN_KEY);
   window.location.assign('/manager/');
