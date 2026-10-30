@@ -358,6 +358,30 @@ Telegram Mini App продолжает использовать проверен
 `LEADFLOW_WEB_AUTH_URL`. Отдельный nginx-vhost находится в
 `deploy/flow.prav-buro.ru.nginx.conf`.
 
+#### Cookie-сессия и локальная сборка интерфейса
+
+После Telegram callback браузер получает HttpOnly-cookie. JavaScript не читает
+её значение: API-клиент отправляет same-origin запрос, а сервер проверяет
+подпись, срок сессии и актуальный доступ сотрудника. Отсутствие `initData` и
+токенов в localStorage не блокирует такой запрос. Заголовок `Authorization`
+добавляется только для существующего Mini App, Telegram web или Lead Flow
+токена; при cookie-входе он отсутствует.
+
+Исходники интерфейса находятся в `manager_miniapp/`. Локальные проверки и сборка:
+
+```bash
+cd manager_miniapp
+npm ci
+npm run test:api
+npm run build
+npm run test:ui
+```
+
+Vite записывает HTML и assets в `app/static/manager/`. Dockerfile копирует этот
+готовый каталог вместе с `app/`, поэтому frontend собирается до сборки образа.
+Регрессии cookie callback, анонимного доступа, повреждения/истечения сессии и
+отключения сотрудника проверяет `tests/test_manager_telegram_auth.py`.
+
 ## База данных в production
 
 Docker Compose запускает отдельный PostgreSQL 16 с постоянным volume

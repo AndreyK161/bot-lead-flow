@@ -67,7 +67,12 @@ export const api: Client = async <T,>(path: string, method = 'GET', data?: unkno
   const initData = window.Telegram?.WebApp?.initData;
   const webToken = localStorage.getItem(WEB_TOKEN_KEY);
   const telegramWebToken = localStorage.getItem(TELEGRAM_WEB_TOKEN_KEY);
-  if (!initData && !webToken && !telegramWebToken) throw new Error('Войдите через Telegram или рабочую учётную запись Lead Flow.');
+  // A Telegram redirect session is HttpOnly: it is sent by the browser and
+  // deliberately has no JavaScript-readable token. The server decides access.
+  const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+  if (initData) headers.Authorization = `tma ${initData}`;
+  else if (telegramWebToken) headers.Authorization = `tgweb ${telegramWebToken}`;
+  else if (webToken) headers.Authorization = `Bearer ${webToken}`;
   const controller = new AbortController();
   const timeoutMessage = 'Сервер не ответил за 15 секунд. ' + (method === 'GET' ? 'Повторите загрузку.' : 'Изменение могло сохраниться. Сначала обновите данные перед повторной отправкой.');
   let timer: ReturnType<typeof setTimeout>;
@@ -81,7 +86,7 @@ export const api: Client = async <T,>(path: string, method = 'GET', data?: unkno
     return await Promise.race([timeout, (async () => {
       let response: Response;
       try { response = await fetch(`/manager/api${path}`, {
-      method, headers: { Authorization: initData ? `tma ${initData}` : telegramWebToken ? `tgweb ${telegramWebToken}` : `Bearer ${webToken}`, 'Content-Type': 'application/json' },
+      method, headers, credentials: 'same-origin',
       body: data === undefined ? undefined : JSON.stringify(data), cache: 'no-store', signal: controller.signal,
       }); } catch {
         if (controller.signal.aborted) throw new Error(timeoutMessage);

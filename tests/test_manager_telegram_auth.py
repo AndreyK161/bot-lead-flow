@@ -7,6 +7,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.manager_planner import api
@@ -92,6 +93,89 @@ class ManagerTelegramAuthTests(unittest.TestCase):
                         self.assertEqual(me.json()["user"]["telegram_id"], 1297686797)
             finally:
                 api.store = previous_store
+
+
+class ManagerTelegramCookieTests(unittest.TestCase):
+    def setUp(self):
+        directory = self.enterContext(tempfile.TemporaryDirectory())
+        previous_store = api.store
+        self.addCleanup(setattr, api, "store", previous_store)
+        api.store = Store(Path(directory) / "planner.sqlite3")
+        api.store.initialize()
+        self.telegram_id = 1073597301
+        settings = SimpleNamespace(
+            telegram_bot_token=BOT_TOKEN,
+            telegram_bot_username="synthetic_bot",
+            telegram_login_max_age_seconds=600,
+            telegram_web_session_seconds=43200,
+            leadflow_web_auth_url="",
+            leadflow_web_auth_timeout_seconds=1,
+        )
+        self.enterContext(patch("app.manager_planner.api.get_settings", return_value=settings))
+        self.identity = self.enterContext(patch(
+            "app.manager_planner.api.access_registry.authorized_identity",
+            return_value={"role": "supervisor", "bitrix_user_id": None},
+        ))
+        application = FastAPI()
+        application.mount("/manager", api.create_app())
+        self.client = self.enterContext(TestClient(application, base_url="https://planner.test"))
+
+    def login(self):
+        response = self.client.get(
+            "/manager/api/auth/telegram/callback",
+            params=signed_login(user_id=self.telegram_id, auth_date=int(time.time())),
+            follow_redirects=False,
+        )
+        self.assertEqual(response.status_code, 303)
+        self.assertEqual(response.headers["location"], "/manager/")
+        return response
+
+    def test_callback_cookie_authenticates_session_and_me_without_authorization_header(self):
+        response = self.login()
+        cookie = response.headers["set-cookie"]
+        for attribute in ("HttpOnly", "Secure", "SameSite=lax", "Path=/manager"):
+            self.assertIn(attribute, cookie)
+        session = self.client.get("/manager/api/auth/telegram/session")
+        self.assertEqual(session.status_code, 200)
+        self.assertEqual(session.json(), {"authenticated": True, "telegram_id": self.telegram_id})
+        me = self.client.get("/manager/api/me")
+        self.assertEqual(me.status_code, 200)
+        self.assertNotIn("authorization", me.request.headers)
+        self.assertEqual(me.json()["user"]["role"], "supervisor")
+
+    def test_anonymous_session_me_and_mutation_are_denied(self):
+        for path in ("/manager/api/auth/telegram/session", "/manager/api/me?role=supervisor"):
+            with self.subTest(path=path):
+                self.assertEqual(self.client.get(path).status_code, 401)
+        response = self.client.post("/manager/api/plans", json={"day": "2026-10-30"})
+        self.assertEqual(response.status_code, 401)
+
+    def test_tampered_and_expired_cookies_are_denied(self):
+        valid = issue_web_session(self.telegram_id, BOT_TOKEN)
+        tampered = valid[:-1] + ("0" if valid[-1] != "0" else "1")
+        expired = issue_web_session(self.telegram_id, BOT_TOKEN, ttl=10, now=int(time.time()) - 1000)
+        for cookie in (tampered, expired):
+            with self.subTest(case="tampered" if cookie == tampered else "expired"):
+                self.client.cookies.clear()
+                self.client.cookies.set(api.TELEGRAM_SESSION_COOKIE, cookie, domain="planner.test", path="/manager")
+                self.assertEqual(self.client.get("/manager/api/me").status_code, 401)
+
+    def test_removing_access_denies_an_existing_cookie_on_the_next_request(self):
+        self.login()
+        self.identity.return_value = None
+        self.assertEqual(self.client.get("/manager/api/me").status_code, 403)
+        self.assertEqual(self.client.get("/manager/api/auth/telegram/session").status_code, 403)
+
+    def test_disabling_employee_denies_an_existing_cookie(self):
+        self.login()
+        with api.store.connection(True) as connection:
+            connection.execute("UPDATE employees SET active=0 WHERE telegram_id=?", (self.telegram_id,))
+        self.assertEqual(self.client.get("/manager/api/me").status_code, 403)
+
+    def test_logout_removes_the_browser_cookie_and_next_request_is_anonymous(self):
+        self.login()
+        self.assertEqual(self.client.post("/manager/api/auth/logout").status_code, 200)
+        self.assertEqual(self.client.get("/manager/api/me").status_code, 401)
 
 
 if __name__ == "__main__":
