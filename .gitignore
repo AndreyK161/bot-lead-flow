@@ -3,6 +3,9 @@ __pycache__/
 *.pyc
 .venv/
 data/
+backups/
+deploy-backups/
+.env.bak-*
 venv/
 .idea
 manager_miniapp/node_modules/
