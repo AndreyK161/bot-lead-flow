@@ -5,16 +5,16 @@ const test = require('node:test');
 const vm = require('node:vm');
 const ts = require('typescript');
 
-function client(fetch, { initData, storage = {} } = {}) {
+function client(fetch, { initData, storage = {}, timers, navigate = () => {} } = {}) {
   const values = new Map(Object.entries(storage));
   const context = vm.createContext({
-    window: { Telegram: { WebApp: { initData } } },
+    window: { Telegram: { WebApp: { initData } }, location: { assign: navigate } },
     localStorage: {
       getItem: key => values.get(key) ?? null,
       setItem: (key, value) => values.set(key, value),
       removeItem: key => values.delete(key),
     },
-    fetch, AbortController, setTimeout, clearTimeout,
+    fetch, AbortController, setTimeout: timers?.setTimeout || setTimeout, clearTimeout: timers?.clearTimeout || clearTimeout,
   });
   function load(filename, dependencies = {}) {
     const source = fs.readFileSync(path.join(__dirname, '../src', filename), 'utf8');
@@ -101,4 +101,42 @@ test('cookie mutations preserve their body and surface 403 without retry', async
 test('cookie responses still pass runtime validation', async () => {
   const api = client(async () => Response.json({ user: { role: 'supervisor' } }));
   await assert.rejects(api.api('/me'), /неожиданном формате/);
+});
+
+for (const operation of ['hasTelegramCookieSession', 'webLogin', 'webLogout', 'telegramLoginConfig', 'telegramLogin']) {
+  test(`${operation} is bounded when the auth server does not respond`, async () => {
+    let expire;
+    let navigated = false;
+    let signal;
+    const api = client(async (_url, options) => {
+      signal = options.signal;
+      return new Promise(() => {});
+    }, {
+      storage: { access_token: 'old-token', planner_telegram_session: 'old-telegram-token' },
+      navigate: () => { navigated = true; },
+      timers: { setTimeout: (callback, ms) => { assert.equal(ms, 15000); expire = callback; return 1; }, clearTimeout: () => {} },
+    });
+    const pending = operation === 'webLogin' ? api.webLogin('test@example.invalid', 'synthetic')
+      : operation === 'telegramLogin' ? api.telegramLogin({ id: 1 }) : api[operation]();
+    assert.equal(typeof expire, 'function', 'auth operation needs a deadline');
+    expire();
+    if (operation === 'hasTelegramCookieSession') assert.equal(await pending, false);
+    else if (operation === 'webLogout') {
+      await pending;
+      assert.equal(navigated, true);
+      assert.equal(api.hasWebSession(), false);
+    } else await assert.rejects(pending, /15 секунд/);
+    assert.equal(signal.aborted, true);
+  });
+}
+
+test('auth timeout also covers a response body that never completes', async () => {
+  let expire;
+  const api = client(async () => ({ ok: true, json: () => new Promise(() => {}) }), {
+    timers: { setTimeout: callback => { expire = callback; return 1; }, clearTimeout: () => {} },
+  });
+  const pending = api.webLogin('test@example.invalid', 'synthetic');
+  await Promise.resolve();
+  expire();
+  await assert.rejects(pending, /15 секунд/);
 });

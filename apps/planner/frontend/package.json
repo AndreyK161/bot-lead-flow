@@ -11,7 +11,10 @@
     "test:navigation": "node --test tests/navigation.cjs",
     "test:profile": "node --test tests/profile.cjs",
     "test:login": "node --test tests/login-recovery.cjs",
-    "test:api": "node --test tests/api.cjs"
+    "test:api": "node --test tests/api.cjs",
+    "test:visual": "node --test tests/visual.cjs",
+    "test:period": "node --test tests/period.cjs",
+    "test:browser": "node --test tests/navigation.cjs tests/profile.cjs tests/login-recovery.cjs tests/period.cjs tests/visual.cjs"
   },
   "dependencies": {
     "react": "^19.2.0",

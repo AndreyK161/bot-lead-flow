@@ -396,13 +396,16 @@ npm ci
 npm run test:api
 npm run build
 npm run test:ui
-npm run test:navigation
-npm run test:profile
-npm run test:login
+npm run test:browser
 ```
 
 Vite записывает HTML и assets в `apps/planner/static/`. Dockerfile копирует этот
 готовый каталог вместе с остальным `apps/`, поэтому frontend собирается до сборки образа сайта.
+Браузерные проверки охватывают обе темы, мобильную ширину, роли, переходы,
+диалоги, периоды и запоздавшие ответы API. Нужен установленный Chromium Playwright
+(или путь в `PLAYWRIGHT_CHROMIUM_EXECUTABLE_PATH`). Подробности пакета исправлений:
+[QUALITY_CHECKS.md](QUALITY_CHECKS.md).
+
 Регрессии cookie callback, анонимного доступа, повреждения/истечения сессии и
 отключения сотрудника проверяет `tests/test_manager_telegram_auth.py`.
 

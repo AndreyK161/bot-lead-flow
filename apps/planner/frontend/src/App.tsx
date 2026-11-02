@@ -64,6 +64,10 @@ export default function App({ client = api, demo = false }: { client?: Client; d
   const [dialer, setDialer] = useState<DialerPayload | null>();
   const [dialerFilters, setDialerFilters] = useState<DialerFilters>();
   const [dialerLoading, setDialerLoading] = useState(false);
+  const dialerVersion = useRef(0);
+  const dialerView = useMemo(() => ({ client, me, section }), [client, me, section]);
+  const currentDialerView = useRef(dialerView);
+  currentDialerView.current = dialerView;
   const [dialerEntity, setDialerEntity] = useState<'lead' | 'deal'>('lead');
   const [dialerCategory, setDialerCategory] = useState<'0' | '2'>('0');
   const [dialerFrom, setDialerFrom] = useState('');
@@ -199,22 +203,24 @@ export default function App({ client = api, demo = false }: { client?: Client; d
 
   const loadDialer = useCallback(async (quiet = false) => {
     if (!me) return;
+    const version = ++dialerVersion.current;
+    const current = () => version === dialerVersion.current && dialerView === currentDialerView.current;
     if (!quiet) setDialerLoading(true);
     try {
-      const [current, available] = await Promise.all([
+      const [session, available] = await Promise.all([
         client<DialerPayload | null>('/dialer/session'),
         dialerFilters ? Promise.resolve(dialerFilters) : client<DialerFilters>('/dialer/filters'),
       ]);
-      setDialer(current); setDialerFilters(available);
-    } catch (e) { if (!quiet) setError((e as Error).message); }
-    finally { if (!quiet) setDialerLoading(false); }
-  }, [client, me, dialerFilters]);
+      if (current()) { setDialer(session); setDialerFilters(available); }
+    } catch (e) { if (current() && !quiet) setError((e as Error).message); }
+    finally { if (current() && !quiet) setDialerLoading(false); }
+  }, [client, me, dialerFilters, dialerView]);
 
   useEffect(() => {
     if (section !== 'calls' || !me) return;
     void loadDialer();
     const timer = setInterval(() => { if (!document.hidden) void loadDialer(true); }, 2500);
-    return () => clearInterval(timer);
+    return () => { clearInterval(timer); dialerVersion.current++; };
   }, [section, me, loadDialer]);
 
   async function act(path: string, method = 'POST', data?: unknown, message = 'Сохранено') {
@@ -240,9 +246,12 @@ export default function App({ client = api, demo = false }: { client?: Client; d
   }
   async function dialerAct(path: string, data?: unknown, message = 'Готово') {
     if (busy) return;
+    dialerVersion.current++;
     setBusy(true); setError('');
     try {
       const value = await client<DialerPayload>(path, 'POST', data);
+      // Invalidate polls that began before the mutation finished.
+      dialerVersion.current++;
       setDialer(value); setToast(message);
     } catch (e) { setError((e as Error).message); }
     finally { setBusy(false); }
@@ -280,11 +289,13 @@ export default function App({ client = api, demo = false }: { client?: Client; d
   const rubles = (value: number) => new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(value);
   const renderCrm = () => crm && <section className="card crm-summary"><div className="section-heading"><h3>Обработка лидов и звонки</h3><span className="badge">Только чтение</span></div>{!crm.available ? <p className="notice">{crm.message}</p> : <div className="crm-grid"><div><span>Обработано лидов</span><strong>{crm.leads?.processed || 0}</strong><small>{crm.leads && Object.entries(crm.leads.stages).length ? Object.entries(crm.leads.stages).map(([stage, count]) => `${stage}: ${count}`).join(' · ') : 'Первый выход из стадии «Не обработан»'}</small></div><div><span>Звонков за день</span><strong>{crm.calls?.total || 0}</strong><small>Исходящих: {crm.calls?.outbound || 0} · дозвоны: {crm.calls?.answered || 0} · от 3 минут: {crm.calls?.long_calls || 0}</small>{crm.calls && !crm.calls.configured && <small>Нет привязки номера МегаФона</small>}</div><div><span>Общая длительность</span><strong>{minutes(crm.calls?.duration_seconds || 0)}</strong><small>Сумма состоявшихся исходящих звонков</small></div>{(crm.pipelines || []).map(p => <div key={p.category_id}><span>{p.category_id === 0 ? 'Сделки · Продажи' : `Сделки · Категория ${p.category_id}`}</span><strong>{p.total}</strong><small>Сумма: {rubles(p.amount)}</small></div>)}</div>}</section>;
   const setProfilePreset = (preset: 'today' | 'week' | 'month') => {
-    const end = new Date(`${me.today}T12:00:00+03:00`);
+    // me.today is a Moscow calendar date. Do calendar arithmetic independently
+    // of the browser timezone (including DST), without shifting that date.
+    const end = new Date(`${me.today}T00:00:00Z`);
     const start = new Date(end);
-    if (preset === 'week') start.setDate(start.getDate() - 6);
-    if (preset === 'month') start.setDate(1);
-    const value = (date: Date) => date.toLocaleDateString('sv-SE', { timeZone: 'Europe/Moscow' });
+    if (preset === 'week') start.setUTCDate(start.getUTCDate() - 6);
+    if (preset === 'month') start.setUTCDate(1);
+    const value = (date: Date) => date.toISOString().slice(0, 10);
     setProfileStart(value(start)); setProfileEnd(value(end));
   };
   const renderProfile = () => <>

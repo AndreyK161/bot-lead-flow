@@ -139,6 +139,50 @@ class DialerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(store.rows("SELECT * FROM dialer_call_events")), 1)
         comment.assert_awaited_once()
 
+    async def test_late_callback_does_not_restart_cancelled_queue(self):
+        for index, status in enumerate(('missed', 'Success')):
+            with self.subTest(status=status):
+                payload = await self.create_queue(100 + index)
+                session_id = payload['session']['id']
+                store.execute("INSERT INTO dialer_queue_items(session_id,position,entity_type,entity_id,phone) VALUES(?,2,'lead','99','79990000001')", (session_id,))
+                call_id = f'CALL-CANCELLED-{index}'
+                with patch('apps.bot.backend.dialer.make_call', new=AsyncMock(return_value=call_id)):
+                    await dialer.start_next(session_id, 100 + index)
+                dialer.cancel(session_id, 100 + index)
+                with patch('apps.bot.backend.dialer.make_call', new=AsyncMock(return_value=f'UNEXPECTED-{index}')) as call, \
+                     patch('apps.bot.backend.dialer._comment', new=AsyncMock()):
+                    self.assertTrue(await dialer.process_callback({'cmd': 'history', 'callid': call_id, 'status': status}))
+                call.assert_not_awaited()
+                self.assertEqual(dialer.session_payload(session_id, 100 + index)['session']['status'], 'cancelled')
+
+    async def test_cancellation_between_read_and_claim_prevents_a_new_call(self):
+        payload = await self.create_queue()
+        session_id = payload['session']['id']
+        original_rows = store.rows
+        def cancel_after_read(sql, params=()):
+            rows = original_rows(sql, params)
+            if "status IN ('pending','error')" in sql and 'dialer_queue_items' in sql:
+                dialer.cancel(session_id, 100)
+            return rows
+        with patch('apps.bot.backend.dialer.store.rows', side_effect=cancel_after_read), \
+             patch('apps.bot.backend.dialer.make_call', new=AsyncMock()) as call:
+            with self.assertRaises(dialer.DialerError) as error:
+                await dialer.start_next(session_id, 100)
+        self.assertEqual(error.exception.status, 409)
+        call.assert_not_awaited()
+        self.assertEqual(dialer.session_payload(session_id, 100)['session']['status'], 'cancelled')
+        self.assertEqual(store.rows('SELECT count(*) AS total FROM dialer_call_attempts')[0]['total'], 0)
+
+    async def test_result_cannot_reopen_a_cancelled_queue(self):
+        payload = await self.create_queue()
+        session_id = payload['session']['id']
+        dialer.cancel(session_id, 100)
+        with patch('apps.bot.backend.dialer._comment', new=AsyncMock()):
+            with self.assertRaises(dialer.DialerError) as error:
+                await dialer.resolve(session_id, payload['current']['id'], 'failed', 100)
+        self.assertEqual(error.exception.status, 409)
+        self.assertEqual(dialer.session_payload(session_id, 100)['session']['status'], 'cancelled')
+
     async def test_session_cannot_be_read_by_another_manager(self):
         payload = await self.create_queue()
         with self.assertRaises(dialer.DialerError) as error:

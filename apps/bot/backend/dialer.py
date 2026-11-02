@@ -290,7 +290,7 @@ async def start_next(session_id: str, telegram_id: int | None = None) -> dict:
     )
     if not candidates:
         store.execute(
-            "UPDATE dialer_sessions SET status='completed',updated_at=CURRENT_TIMESTAMP WHERE id=?",
+            "UPDATE dialer_sessions SET status='completed',updated_at=CURRENT_TIMESTAMP WHERE id=? AND status IN ('active','paused')",
             (session_id,),
         )
         return session_payload(session_id, telegram_id)
@@ -308,10 +308,13 @@ async def start_next(session_id: str, telegram_id: int | None = None) -> dict:
                VALUES(?,?,'starting')""",
             (item["id"], session_id),
         )
-        conn.execute(
-            "UPDATE dialer_sessions SET status='active',updated_at=CURRENT_TIMESTAMP WHERE id=?",
+        claimed = conn.execute(
+            "UPDATE dialer_sessions SET status='active',updated_at=CURRENT_TIMESTAMP "
+            "WHERE id=? AND status IN ('active','paused')",
             (session_id,),
         )
+        if claimed.rowcount != 1:
+            raise DialerError("Очередь уже завершена.", 409)
     try:
         call_id = await make_call(str(session["bitrix_user_id"]), str(item["phone"]))
     except DialerError as exc:
@@ -359,6 +362,8 @@ async def resolve(
     session_id: str, item_id: int, result: str, telegram_id: int,
 ) -> dict:
     session = _owned_session(session_id, telegram_id)
+    if session["status"] in {"completed", "cancelled"}:
+        raise DialerError("Очередь уже завершена.", 409)
     allowed = {"answered", "failed", "voicemail", "skipped", "postponed", "retry"}
     if result not in allowed:
         raise DialerError("Неизвестный результат звонка.")
@@ -389,7 +394,7 @@ async def resolve(
                 (stored_result, item["last_call_id"]),
             )
         conn.execute(
-            "UPDATE dialer_sessions SET status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+            "UPDATE dialer_sessions SET status=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status IN ('active','paused')",
             ("paused" if result == "answered" else "active", session_id),
         )
     await _comment(item, str(session["manager_name"]), stored_result)
@@ -402,7 +407,7 @@ async def resolve(
         )
         if not pending:
             store.execute(
-                "UPDATE dialer_sessions SET status='completed',updated_at=CURRENT_TIMESTAMP WHERE id=?",
+                "UPDATE dialer_sessions SET status='completed',updated_at=CURRENT_TIMESTAMP WHERE id=? AND status IN ('active','paused')",
                 (session_id,),
             )
     return session_payload(session_id, telegram_id)
@@ -471,14 +476,14 @@ async def process_callback(data: dict) -> bool:
                WHERE id=?""", (result, history_status or result, attempt["item_id"]),
         )
         conn.execute(
-            "UPDATE dialer_sessions SET status=?,updated_at=CURRENT_TIMESTAMP WHERE id=?",
+            "UPDATE dialer_sessions SET status=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status IN ('active','paused')",
             ("paused" if result == "awaiting_confirmation" else "active", attempt["session_id"]),
         )
     if result != "awaiting_confirmation":
         item = store.rows("SELECT * FROM dialer_queue_items WHERE id=?", (attempt["item_id"],))[0]
         session = _owned_session(str(attempt["session_id"]))
         await _comment(item, str(session["manager_name"]), result)
-        if int(session["auto_advance"]):
+        if int(session["auto_advance"]) and session["status"] in {"active", "paused"}:
             try:
                 await start_next(str(attempt["session_id"]))
             except DialerError:
