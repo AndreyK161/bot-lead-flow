@@ -6,6 +6,7 @@ import sqlite3
 import time
 from contextlib import closing
 
+from .storage_errors import DATABASE_ERRORS
 from .distribution_import import import_snapshot
 from .distribution_queue import validate
 
@@ -25,18 +26,18 @@ def sync_once(store, queue_path, authorized_ids):
                 previous = db.execute("SELECT status FROM distributions WHERE id=? AND sha256=?", (identifier, digest)).fetchone()
             if previous:
                 with store.connection(True) as db:
-                    db.execute("INSERT INTO import_attempts VALUES(?,?,1,?,'') ON CONFLICT(id) DO UPDATE SET status=excluded.status,error_code='' WHERE import_attempts.status<>excluded.status", (identifier, previous[0], int(time.time())))
+                    db.execute("INSERT INTO import_attempts VALUES(?,?,1,?,'') ON CONFLICT(id) DO UPDATE SET status=excluded.status,error_code='' WHERE import_attempts.status<>excluded.status", (identifier, previous["status"], int(time.time())))
                 continue
             snapshot = json.loads(payload)
             if snapshot["distribution_id"] != identifier or snapshot["workday"] != day or validate(snapshot) != digest:
                 raise ValueError("Invalid queue record")
             result = import_snapshot(store, snapshot, authorized_ids)
             status, error = result["status"], ""
-        except (ValueError, KeyError, TypeError, PermissionError, sqlite3.Error):
+        except (ValueError, KeyError, TypeError, PermissionError, *DATABASE_ERRORS):
             status, error = "error", "record_failed"
             logger.warning("Distribution import record failed")
         with store.connection(True) as db:
-            db.execute("INSERT INTO import_attempts VALUES(?,?,1,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,attempts=attempts+1,last_attempt=excluded.last_attempt,error_code=excluded.error_code", (identifier, status, int(time.time()), error))
+            db.execute("INSERT INTO import_attempts VALUES(?,?,1,?,?) ON CONFLICT(id) DO UPDATE SET status=excluded.status,attempts=import_attempts.attempts+1,last_attempt=excluded.last_attempt,error_code=excluded.error_code", (identifier, status, int(time.time()), error))
         results.append(status)
     return results
 
@@ -47,7 +48,7 @@ async def sync_loop(store, path, authorized_ids, interval=30):
     while True:
         try:
             await asyncio.to_thread(sync_once, store, path, authorized_ids)
-        except (OSError, ValueError, sqlite3.Error):
+        except (OSError, ValueError, *DATABASE_ERRORS):
             logger.warning("Distribution queue temporarily unavailable")
         await asyncio.sleep(interval)
 

@@ -117,6 +117,8 @@ class Settings(BaseSettings):
     mini_app_url: str = "https://lead.prav-buro.ru/miniapp"
     manager_app_url: str = "https://tg.prav-buro.ru/workday/"
     manager_planner_database_path: str = "data/manager_planner.sqlite3"
+    # Explicit opt-in; the core DATABASE_URL does not select Planner storage.
+    manager_planner_database_url: str = ""
     planner_distribution_poll_seconds: float = 5.0
     # Optional bearer-token validation endpoint for the standalone web UI.
     # Telegram Mini App authorization remains the default transport.

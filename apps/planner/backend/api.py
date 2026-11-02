@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import logging
 import hashlib
-import sqlite3
 import time
 from datetime import date
 from pathlib import Path
@@ -20,7 +19,8 @@ from apps.bot.backend import dialer, planner_access as access_registry
 from .auth import InvalidInitData, InvalidTelegramLogin, issue_web_session, validate_init_data, validate_login_widget, validate_web_session
 from .integrations import CRM_STATUS, PlannerCRM
 from .models import DecisionInput, DialerResultInput, DialerSessionInput, EmployeeInput, EmployeePatch, GoalInput, MoveInput, PlanInput, TaskInput, TaskPatch, TimerInput
-from .store import DomainError, Store, today
+from .storage_errors import DATABASE_ERRORS, INTEGRITY_ERRORS
+from .store import configured_store, DomainError, Store, today
 
 WORKDAY = {"start": "10:00", "end": "19:00", "timezone": "Europe/Moscow", "reminders_enabled": False}
 logger = logging.getLogger(__name__)
@@ -41,9 +41,11 @@ store = Store(Path("data/manager_planner.sqlite3"))
 def initialize() -> None:
     """Create/migrate only the isolated Lead Flow planner database."""
     global store
-    configured_path = Path(get_settings().manager_planner_database_path)
-    if store.path != configured_path:
-        store = Store(configured_path)
+    settings = get_settings()
+    configured_path = Path(settings.manager_planner_database_path)
+    database_url = str(getattr(settings, "manager_planner_database_url", "") or "").strip()
+    if store.database_url != database_url or (not database_url and store.path != configured_path):
+        store = configured_store(configured_path, database_url)
     store.initialize()
 
 
@@ -55,13 +57,16 @@ def create_app() -> FastAPI:
     async def domain_error(request, exc):
         return JSONResponse({"detail": exc.message}, status_code=exc.status)
 
-    @app.exception_handler(sqlite3.IntegrityError)
     async def conflict(request, exc):
         return JSONResponse({"detail": "Запись уже существует или конфликтует с другим изменением. Обновите данные."}, status_code=409)
 
-    @app.exception_handler(sqlite3.Error)
     async def database_error(request, exc):
         return JSONResponse({"detail": "Хранилище временно недоступно. Повторите позже."}, status_code=503)
+
+    for error_class in DATABASE_ERRORS:
+        app.add_exception_handler(error_class, database_error)
+    for error_class in INTEGRITY_ERRORS:
+        app.add_exception_handler(error_class, conflict)
 
     @app.exception_handler(RequestValidationError)
     async def invalid_input(request, exc):
@@ -259,7 +264,7 @@ def create_app() -> FastAPI:
         try:
             with store.connection() as connection:
                 connection.execute("SELECT 1 FROM plans LIMIT 1").fetchone()
-        except sqlite3.Error:
+        except DATABASE_ERRORS:
             return JSONResponse({"status": "unavailable"}, status_code=503)
         return {"status": "ok"}
 

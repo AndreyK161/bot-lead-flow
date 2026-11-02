@@ -1,4 +1,4 @@
-"""Transactional planner storage; never migrates the existing bot database."""
+"""Planner business storage with transactional rules shared by both backends."""
 import json
 import os
 import sqlite3
@@ -86,6 +86,7 @@ SCHEMA = [
 class Store:
     def __init__(self, path: Path):
         self.path = path
+        self.database_url = ""
 
     @contextmanager
     def connection(self, write=False):
@@ -208,6 +209,16 @@ class Store:
                 db.execute("PRAGMA user_version=8")
 
     @staticmethod
+    def insert_id(db, sql, args=()):
+        return db.execute(sql, args).lastrowid
+
+    @staticmethod
+    def schema_version(db):
+        return db.execute("PRAGMA user_version").fetchone()[0]
+
+    previous_workday_sql = "SELECT id FROM plans WHERE employee_id=? AND day<? AND strftime('%w',day) NOT IN ('0','6') ORDER BY day DESC LIMIT 1"
+
+    @staticmethod
     def row(db, sql, args=()):
         result = db.execute(sql, args).fetchone()
         if result is None:
@@ -302,20 +313,14 @@ class Store:
                 "SELECT * FROM plans WHERE employee_id=? AND day=?", (actor["id"], workday),
             ).fetchone()
             if plan is None:
-                plan_id = db.execute(
-                    "INSERT INTO plans(employee_id,day,created_at) VALUES(?,?,?)",
-                    (actor["id"], workday, int(time.time())),
-                ).lastrowid
+                plan_id = self.insert_id(db, "INSERT INTO plans(employee_id,day,created_at) VALUES(?,?,?)", (actor["id"], workday, int(time.time())))
             elif plan["status"] != "draft":
                 raise DomainError("Тестовый план на сегодня уже подтверждён или закрыт.")
             else:
                 plan_id = plan["id"]
-            task_id = db.execute(
-                "INSERT INTO tasks(plan_id,employee_id,title,description,kind,target,created_by,locked,created_at,creation_actor,external_id) "
-                "VALUES(?,?,'Тест распределения недозвонов',?,'quantitative',?,?,0,?,'system',?)",
-                (plan_id, actor["id"], "Назначенные даты: " + ", ".join(sorted(dates)) + f". Лидов: {total}.",
-                 total, actor["id"], int(time.time()), external_id),
-            ).lastrowid
+            task_id = self.insert_id(db, "INSERT INTO tasks(plan_id,employee_id,title,description,kind,target,created_by,locked,created_at,creation_actor,external_id) "
+                "VALUES(?,?,'Тест распределения недозвонов',?,'quantitative',?,?,0,?,'system',?)", (plan_id, actor["id"], "Назначенные даты: " + ", ".join(sorted(dates)) + f". Лидов: {total}.",
+                 total, actor["id"], int(time.time()), external_id))
             metadata = {"distribution_id": distribution_id, "migration_test": True, "target": total}
             db.execute(
                 "INSERT INTO system_audit(plan_id,entity,entity_id,action,after_json,created_at) "
@@ -384,8 +389,7 @@ class Store:
                         new = self.row(db, "SELECT * FROM tasks WHERE id=?", (old["id"],))
                         self.audit(db, actor, "task", old["id"], "timer_stop", old, new, old["plan_id"])
             else:
-                employee_id = db.execute("INSERT INTO employees(name,telegram_id,bitrix_id,role) VALUES(?,?,?,'manager')",
-                                         (values["name"], values["telegram_id"], values["bitrix_id"])).lastrowid
+                employee_id = self.insert_id(db, "INSERT INTO employees(name,telegram_id,bitrix_id,role) VALUES(?,?,?,'manager')", (values["name"], values["telegram_id"], values["bitrix_id"]))
             after = self.row(db, "SELECT * FROM employees WHERE id=?", (employee_id,))
             self.audit(db, actor, "employee", employee_id, "employee_saved", before, after)
             return after
@@ -393,7 +397,7 @@ class Store:
     def new_plan(self, db, actor, employee_id, day):
         employee = self.row(db, "SELECT * FROM employees WHERE id=? AND role='manager' AND active=1", (employee_id,))
         self.owner(actor, employee["id"])
-        plan_id = db.execute("INSERT INTO plans(employee_id,day,created_at) VALUES(?,?,?)", (employee_id, day, int(time.time()))).lastrowid
+        plan_id = self.insert_id(db, "INSERT INTO plans(employee_id,day,created_at) VALUES(?,?,?)", (employee_id, day, int(time.time())))
         plan = self.plan(db, actor, plan_id)
         self.audit(db, actor, "plan", plan_id, "plan_created", None, plan, plan_id)
         return plan
@@ -406,10 +410,10 @@ class Store:
                 raise DomainError("План на эту дату уже существует.")
             plan = self.new_plan(db, actor, employee_id, day)
             if from_previous:
-                previous = db.execute("SELECT id FROM plans WHERE employee_id=? AND day<? AND strftime('%w',day) NOT IN ('0','6') ORDER BY day DESC LIMIT 1", (employee_id, day)).fetchone()
+                previous = db.execute(self.previous_workday_sql, (employee_id, day)).fetchone()
                 if previous is None:
                     raise DomainError("Нет плана предыдущего рабочего дня для копирования.")
-                for row in db.execute("SELECT * FROM tasks WHERE plan_id=? AND kind!='bitrix' AND status!='moved' ORDER BY id", (previous[0],)).fetchall():
+                for row in db.execute("SELECT * FROM tasks WHERE plan_id=? AND kind!='bitrix' AND status!='moved' ORDER BY id", (previous["id"],)).fetchall():
                     old = dict(row)
                     if self.imported_task(db, old["id"]):
                         continue
@@ -456,7 +460,7 @@ class Store:
             if task["distribution_target_locked"]:
                 link = db.execute("SELECT d.payload FROM distribution_tasks x JOIN distributions d ON d.id=x.distribution_id WHERE x.task_id=?", (task["id"],)).fetchone()
                 employee = db.execute("SELECT telegram_id,bitrix_id FROM employees WHERE id=?", (task["employee_id"],)).fetchone()
-                allocation = next((a for a in json.loads(link[0])["allocations"] if a["telegram_id"] == employee[0] and a["bitrix_id"] == employee[1]), None)
+                allocation = next((a for a in json.loads(link["payload"])["allocations"] if a["telegram_id"] == employee["telegram_id"] and a["bitrix_id"] == employee["bitrix_id"]), None)
                 task["distribution_source"] = {"name": "Утреннее распределение", "dates": allocation["dates"] if allocation else [], "count": task["target"]}
             task["elapsed_seconds"] = self.effective_seconds(task)
         plan["summary"] = self.summary(plan["tasks"])
@@ -469,13 +473,13 @@ class Store:
             return self.detail(db, actor, plan_id)
 
     def insert_task(self, db, actor, plan, values, locked=None, source=None):
-        count = db.execute("SELECT count(*) FROM tasks WHERE plan_id=?", (plan["id"],)).fetchone()[0]
+        count = db.execute("SELECT count(*) AS total FROM tasks WHERE plan_id=?", (plan["id"],)).fetchone()["total"]
         if count >= 100:
             raise DomainError("В плане может быть не более 100 задач.")
-        task_id = db.execute("""INSERT INTO tasks(plan_id,employee_id,title,description,kind,planned_minutes,target,created_by,locked,created_at,source_task_id)
+        task_id = self.insert_id(db, """INSERT INTO tasks(plan_id,employee_id,title,description,kind,planned_minutes,target,created_by,locked,created_at,source_task_id)
                              VALUES(?,?,?,?,?,?,?,?,?,?,?)""", (plan["id"], plan["employee_id"], values["title"], values["description"], values["kind"],
                              values["planned_minutes"], values["target"], actor["id"],
-                             int(actor["role"] == "supervisor") if locked is None else locked, int(time.time()), source)).lastrowid
+                             int(actor["role"] == "supervisor") if locked is None else locked, int(time.time()), source))
         task = self.row(db, "SELECT * FROM tasks WHERE id=?", (task_id,))
         self.audit(db, actor, "task", task_id, "task_created", None, task, plan["id"])
         return task
@@ -530,7 +534,7 @@ class Store:
                 if task["status"] == "done" or plan["day"] != today():
                     raise DomainError("Таймер доступен для незавершённых задач сегодняшнего дня.")
                 running = db.execute("SELECT id FROM tasks WHERE employee_id=? AND timer_started IS NOT NULL", (actor["id"],)).fetchone()
-                if running and running[0] != task_id:
+                if running and running["id"] != task_id:
                     raise DomainError("Уже работает таймер другой задачи. Сначала остановите его.")
                 if not running:
                     db.execute("UPDATE tasks SET timer_started=?,status='in_progress',revision=revision+1 WHERE id=?", (int(time.time()), task_id))
@@ -560,9 +564,8 @@ class Store:
             self.audit(db, actor, "task", task_id, "task_moved", task, {**after, "move_reason": reason, "destination_day": day}, plan["id"])
             return new
 
-    @staticmethod
-    def imported_task(db, task_id):
-        if db.execute("PRAGMA user_version").fetchone()[0] < 3:
+    def imported_task(self, db, task_id):
+        if self.schema_version(db) < 3:
             return False
         return db.execute("SELECT 1 FROM distribution_tasks WHERE task_id=?", (task_id,)).fetchone() is not None
 
@@ -607,8 +610,7 @@ class Store:
                 raise DomainError("У этой задачи нет количественной цели.", 422)
             if task[field] == values["proposed"]:
                 raise DomainError("Предложенное значение совпадает с действующим.", 422)
-            request_id = db.execute("INSERT INTO goal_requests(task_id,employee_id,field,old_value,proposed,reason,created_at) VALUES(?,?,?,?,?,?,?)",
-                                    (task_id, actor["id"], field, task[field], values["proposed"], values["reason"], int(time.time()))).lastrowid
+            request_id = self.insert_id(db, "INSERT INTO goal_requests(task_id,employee_id,field,old_value,proposed,reason,created_at) VALUES(?,?,?,?,?,?,?)", (task_id, actor["id"], field, task[field], values["proposed"], values["reason"], int(time.time())))
             after = self.row(db, "SELECT * FROM goal_requests WHERE id=?", (request_id,))
             self.audit(db, actor, "request", request_id, "goal_requested", None, after, plan["id"])
             return after
@@ -691,3 +693,11 @@ class Store:
                 for key in ("before_json", "after_json"):
                     row[key] = json.loads(row[key]) if row[key] else None
             return rows
+
+
+def configured_store(path: Path, database_url: str = "") -> Store:
+    """PostgreSQL is opt-in; never reuse the bot URL implicitly."""
+    if database_url:
+        from .postgres import PostgresStore
+        return PostgresStore(database_url)
+    return Store(path)

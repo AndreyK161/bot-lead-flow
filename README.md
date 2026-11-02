@@ -411,6 +411,12 @@ Vite записывает HTML и assets в `apps/planner/static/`. Dockerfile �
 
 ## База данных в production
 
+Эта секция ниже описывает базу **бота**. У Planner по умолчанию остаётся отдельная
+SQLite `MANAGER_PLANNER_DATABASE_PATH`. Поддержка PostgreSQL для Planner готовится
+отдельно: [PLANNER_POSTGRES.md](PLANNER_POSTGRES.md). Переменная
+`MANAGER_PLANNER_DATABASE_URL` пока должна оставаться пустой в production:
+перенос существующих данных и переключение бэкапов ещё не завершены.
+
 Docker Compose запускает отдельный PostgreSQL 16 с постоянным volume
 `postgres_data`. Перед первым запуском задайте в `.env` длинный буквенно-цифровой
 `POSTGRES_PASSWORD`. SQLite остаётся fallback для локальной разработки, когда

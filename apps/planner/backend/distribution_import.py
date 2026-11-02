@@ -51,15 +51,15 @@ def import_snapshot(store, snapshot, authorized_ids):
             outcome = "review"
             if not reasons and (plan is None or plan["status"] == "draft"):
                 if plan is None:
-                    plan_id = db.execute("INSERT INTO plans(employee_id,day,created_at) VALUES(?,?,?)", (employee["id"], snapshot["workday"], int(time.time()))).lastrowid
+                    plan_id = store.insert_id(db, "INSERT INTO plans(employee_id,day,created_at) VALUES(?,?,?)", (employee["id"], snapshot["workday"], int(time.time())))
                 else:
                     plan_id = plan["id"]
-                if db.execute("SELECT count(*) FROM tasks WHERE plan_id=?", (plan_id,)).fetchone()[0] >= 100:
+                if db.execute("SELECT count(*) AS total FROM tasks WHERE plan_id=?", (plan_id,)).fetchone()["total"] >= 100:
                     raise ValueError("В черновике нет места для импортированной задачи.")
                 description = "Назначенные даты: " + ", ".join(item["dates"]) + f". Лидов: {item['count']}."
                 # created_by retains confirmation provenance; system_audit explicitly
                 # records creation as automatic, never as an employee action.
-                task_id = db.execute("INSERT INTO tasks(plan_id,employee_id,title,description,kind,target,created_by,locked,created_at,creation_actor) VALUES(?,?,'Обработка недозвонов',?,'quantitative',?,?,1,?,'system')", (plan_id, employee["id"], description, item["count"], initiator["id"], int(time.time()))).lastrowid
+                task_id = store.insert_id(db, "INSERT INTO tasks(plan_id,employee_id,title,description,kind,target,created_by,locked,created_at,creation_actor) VALUES(?,?,'Обработка недозвонов',?,'quantitative',?,?,1,?,'system')", (plan_id, employee["id"], description, item["count"], initiator["id"], int(time.time())))
                 metadata = {"distribution_id": snapshot["distribution_id"], "confirmed_by_telegram_id": snapshot["confirmed_by"], "confirmed_at": snapshot["confirmed_at"], "creation_actor": "system", "target": item["count"]}
                 db.execute("INSERT INTO system_audit(plan_id,entity,entity_id,action,after_json,created_at) VALUES(?,'task',?,'distribution_imported',?,?)", (plan_id, task_id, canonical(metadata), int(time.time())))
                 outcome = "imported"
