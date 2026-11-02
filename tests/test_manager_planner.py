@@ -1,5 +1,6 @@
 import tempfile
 import unittest
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
@@ -35,6 +36,48 @@ class IsolatedManagerPlannerTests(unittest.TestCase):
         supervisor = self.store.actor(1073597301)
         self.assertEqual(supervisor['role'], 'supervisor')
 
+    def test_employee_binding_edits_survive_reinitialization_without_duplicates(self):
+        changes = (
+            {"bitrix_id": 111},
+            {"telegram_id": 900000001},
+            {"telegram_id": 900000001, "bitrix_id": 111},
+            {"telegram_id": None, "bitrix_id": None},
+        )
+        for change in changes:
+            with self.subTest(change=change), tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "planner.sqlite3"
+                store = Store(path)
+                store.initialize()
+                supervisor = store.actor(1073597301)
+                employee = store.actor(7939114214)
+                plan = store.create_plan(employee, "2026-10-21")
+                store.add_task(employee, plan["id"], {
+                    "title": "Existing task", "description": "", "kind": "general",
+                    "planned_minutes": 15, "target": None,
+                })
+                store.save_employee(supervisor, {
+                    "name": "Updated employee", "active": False,
+                    "telegram_id": employee["telegram_id"],
+                    "bitrix_id": employee["bitrix_id"], **change,
+                }, employee["id"])
+                with store.connection() as connection:
+                    before = list(connection.iterdump())
+
+                # A fresh Store models a restart, including repeated startup.
+                for _ in range(2):
+                    restarted = Store(path)
+                    restarted.initialize()
+                    with restarted.connection() as connection:
+                        self.assertEqual(list(connection.iterdump()), before)
+                    saved = next(e for e in restarted.employees(supervisor)
+                                 if e["id"] == employee["id"])
+                    self.assertEqual(saved["name"], "Updated employee")
+                    self.assertEqual(saved["active"], 0)
+                    for key, value in change.items():
+                        self.assertEqual(saved[key], value)
+                    self.assertEqual(restarted.get_plan(supervisor, plan["id"])["tasks"][0]["employee_id"],
+                                     employee["id"])
+
     def test_vyacheslav_telegram_alias_opens_same_manager(self):
         canonical = self.store.actor(8306778724)
         alias = self.store.actor(399005637)
@@ -42,6 +85,48 @@ class IsolatedManagerPlannerTests(unittest.TestCase):
         self.assertEqual(alias['bitrix_id'], 460)
         self.assertEqual(alias['role'], 'manager')
         self.assertEqual(alias['name'], 'Вячеслав Шандра')
+
+    def test_another_employees_alias_is_rejected_without_changing_database(self):
+        for active in (True, False):
+            for editing in (True, False):
+                with self.subTest(owner_active=active, editing=editing), tempfile.TemporaryDirectory() as directory:
+                    store = Store(Path(directory) / "planner.sqlite3")
+                    store.initialize()
+                    supervisor = store.actor(1073597301)
+                    alias_owner = store.actor(8306778724)
+                    employee = store.actor(7939114214)
+                    if not active:
+                        store.save_employee(supervisor, {
+                            "name": alias_owner["name"], "telegram_id": alias_owner["telegram_id"],
+                            "bitrix_id": alias_owner["bitrix_id"], "active": False,
+                        }, alias_owner["id"])
+                    with store.connection() as connection:
+                        before = list(connection.iterdump())
+                    with self.assertRaises(DomainError) as error:
+                        store.save_employee(supervisor, {
+                            "name": "Conflicting employee", "telegram_id": 399005637,
+                            "bitrix_id": employee["bitrix_id"] if editing else 999,
+                            "active": False,
+                        }, employee["id"] if editing else None)
+                    self.assertEqual(error.exception.status, 409)
+                    self.assertIn("Telegram ID", error.exception.message)
+                    with store.connection() as connection:
+                        self.assertEqual(list(connection.iterdump()), before)
+                    self.assertEqual(store.actor(employee["telegram_id"])["id"], employee["id"])
+                    if active:
+                        self.assertEqual(store.actor(399005637)["id"], alias_owner["id"])
+
+    def test_employee_can_use_their_own_alias_as_primary_telegram_id(self):
+        supervisor = self.store.actor(1073597301)
+        employee = self.store.actor(8306778724)
+        saved = self.store.save_employee(supervisor, {
+            "name": employee["name"], "telegram_id": 399005637,
+            "bitrix_id": employee["bitrix_id"], "active": True,
+        }, employee["id"])
+        self.assertEqual(saved["telegram_id"], 399005637)
+        self.assertEqual(self.store.actor(399005637)["id"], employee["id"])
+        self.store.initialize()
+        self.assertEqual(self.store.actor(399005637)["id"], employee["id"])
 
     def test_owner_can_create_an_independent_daily_plan(self):
         owner = self.store.actor(1297686797)
@@ -118,6 +203,64 @@ class IsolatedManagerPlannerTests(unittest.TestCase):
                 (value['distribution_id'],),
             ).fetchone()
         self.assertEqual(tuple(attempt), ('imported', ''))
+
+    def test_bitrix_deadline_move_creates_new_daily_entry_and_preserves_history(self):
+        for close_previous in (False, True):
+            with self.subTest(close_previous=close_previous), tempfile.TemporaryDirectory() as directory:
+                store = Store(Path(directory) / "planner.sqlite3")
+                store.initialize()
+                manager = store.actor(7939114214)
+                old_plan = store.create_plan(manager, "2026-10-20")
+                new_plan = store.create_plan(manager, "2026-10-21")
+                external = ExternalTask(
+                    external_id="bitrix:77", title="Call client",
+                    url="https://example.invalid/tasks/77/",
+                    deadline=datetime.fromisoformat("2026-10-20T12:00:00+03:00"),
+                    external_status="2",
+                )
+                self.assertEqual(store.sync_external_tasks(old_plan["id"], [external]), 1)
+                if close_previous:
+                    store.close_plan(manager, old_plan["id"])
+                with store.connection() as connection:
+                    previous_tasks = [dict(row) for row in connection.execute(
+                        "SELECT * FROM tasks WHERE plan_id=?", (old_plan["id"],))]
+                previous_report = store.report(manager, old_plan["id"]) if close_previous else None
+                moved = replace(external, deadline=datetime.fromisoformat("2026-10-21T12:00:00+03:00"))
+
+                self.assertEqual(store.sync_external_tasks(new_plan["id"], [moved]), 1)
+                self.assertEqual(store.sync_external_tasks(new_plan["id"], [moved]), 0)
+                updated = replace(moved, title="Updated in Bitrix", external_status="5")
+                self.assertEqual(store.sync_external_tasks(new_plan["id"], [updated]), 1)
+                self.assertEqual(store.sync_external_tasks(new_plan["id"], [updated]), 0)
+                tasks = store.get_plan(manager, new_plan["id"])["tasks"]
+                self.assertEqual(len(tasks), 1)
+                self.assertEqual(tasks[0]["title"], updated.title)
+                self.assertEqual(tasks[0]["status"], "done")
+                self.assertIn("2026-10-21", tasks[0]["description"])
+                with store.connection() as connection:
+                    self.assertEqual([dict(row) for row in connection.execute(
+                        "SELECT * FROM tasks WHERE plan_id=?", (old_plan["id"],))], previous_tasks)
+                if close_previous:
+                    self.assertEqual(store.sync_external_tasks(old_plan["id"], [updated]), 0)
+                    self.assertEqual(store.report(manager, old_plan["id"]), previous_report)
+
+    def test_reassigned_bitrix_task_can_appear_in_new_employees_plan(self):
+        first = self.store.actor(7939114214)
+        second = self.store.actor(7874883320)
+        first_plan = self.store.create_plan(first, "2026-10-21")
+        second_plan = self.store.create_plan(second, "2026-10-21")
+        external = ExternalTask(
+            external_id="bitrix:77", title="Call client", url="https://example.invalid/tasks/77/",
+            deadline=datetime.fromisoformat("2026-10-21T12:00:00+03:00"), external_status="2",
+        )
+        self.assertEqual(self.store.sync_external_tasks(first_plan["id"], [external]), 1)
+        self.assertEqual(self.store.sync_external_tasks(second_plan["id"], [external]), 1)
+        self.assertEqual(self.store.sync_external_tasks(second_plan["id"], [external]), 0)
+        tasks = self.store.get_plan(second, second_plan["id"])["tasks"]
+        self.assertEqual(len(tasks), 1)
+        self.assertEqual(tasks[0]["employee_id"], second["id"])
+        with self.assertRaises(DomainError):
+            self.store.get_plan(first, second_plan["id"])
 
     def test_external_bitrix_tasks_are_read_only_and_sync_idempotently(self):
         yana = self.store.actor(7939114214)

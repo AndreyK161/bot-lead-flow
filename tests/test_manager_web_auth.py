@@ -7,6 +7,7 @@ from unittest.mock import patch
 from fastapi.testclient import TestClient
 
 from app.manager_planner import api
+from app.manager_planner.auth import issue_web_session
 from app.manager_planner.store import Store
 
 
@@ -69,6 +70,46 @@ class ManagerWebAuthTests(unittest.TestCase):
         self.assertEqual(response.json()["user"]["bitrix_id"], 110)
         self.assertEqual(response.json()["user"]["name"], "Яна из Lead Flow")
         self.assertEqual(response.json()["user"]["role"], "manager")
+
+    def test_explicit_bearer_uses_web_identity_despite_telegram_cookie(self):
+        cookies = {
+            "invalid": "corrupt-session",
+            "expired": issue_web_session(1073597301, self.settings.telegram_bot_token, now=1, ttl=1),
+            "another_user": issue_web_session(1073597301, self.settings.telegram_bot_token),
+        }
+        FakeAsyncClient.response = FakeResponse(200, {
+            "id": 9, "full_name": "Web manager", "role": "manager",
+            "is_active": True, "bitrix_user_id": "110",
+        })
+        with patch("app.manager_planner.api.access_registry.authorized_identity", return_value={
+            "role": "supervisor", "bitrix_user_id": None,
+        }):
+            for case, cookie in cookies.items():
+                with self.subTest(cookie=case):
+                    api._web_identity_cache.clear()
+                    response = self.client.get("/api/me", headers={
+                        "Authorization": "Bearer valid-web-token",
+                        "Cookie": f"{api.TELEGRAM_SESSION_COOKIE}={cookie}",
+                    })
+                    self.assertEqual(response.status_code, 200)
+                    user = response.json()["user"]
+                    self.assertEqual(user["role"], "manager")
+                    self.assertEqual(user["bitrix_id"], 110)
+                    self.assertEqual(user["web_user_id"], 9)
+
+    def test_rejected_authorization_does_not_fall_back_to_valid_cookie(self):
+        cookie = issue_web_session(1073597301, self.settings.telegram_bot_token)
+        FakeAsyncClient.response = FakeResponse(401, {"detail": "invalid"})
+        with patch("app.manager_planner.api.access_registry.authorized_identity", return_value={
+            "role": "supervisor", "bitrix_user_id": None,
+        }):
+            for authorization in ("Bearer invalid-token", "Bearer ", "Basic unsupported"):
+                with self.subTest(authorization=authorization):
+                    response = self.client.get("/api/me", headers={
+                        "Authorization": authorization,
+                        "Cookie": f"{api.TELEGRAM_SESSION_COOKIE}={cookie}",
+                    })
+                    self.assertEqual(response.status_code, 401)
 
     def test_admin_uses_supervisor_scope_without_client_role_override(self):
         FakeAsyncClient.response = FakeResponse(200, {

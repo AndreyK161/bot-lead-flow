@@ -120,6 +120,8 @@ class Store:
                     raise RuntimeError("Для планировщика нужна отдельная пустая база.")
                 for statement in SCHEMA:
                     db.execute(statement)
+                # Seed only a new database. Saved employee bindings are authoritative
+                # on later startups, including bindings explicitly cleared by a supervisor.
                 db.executemany("INSERT INTO employees(telegram_id,bitrix_id,name,role) VALUES(?,?,?,?)", EMPLOYEE_BINDINGS)
                 db.execute("PRAGMA user_version=1")
                 version = 1
@@ -204,21 +206,6 @@ class Store:
                     (8, int(time.time()), encode({"vyacheslav_full_name": renamed})),
                 )
                 db.execute("PRAGMA user_version=8")
-            # Lead Flow's isolated test database may already exist from the
-            # first migration stage. Add only missing, conflict-free bindings;
-            # never rewrite legacy employees or identities.
-            for telegram_id, bitrix_id, name, role in EMPLOYEE_BINDINGS:
-                existing = db.execute(
-                    "SELECT * FROM employees WHERE telegram_id=? OR (? IS NOT NULL AND bitrix_id=?)",
-                    (telegram_id, bitrix_id, bitrix_id),
-                ).fetchall()
-                if not existing:
-                    db.execute(
-                        "INSERT INTO employees(telegram_id,bitrix_id,name,role) VALUES(?,?,?,?)",
-                        (telegram_id, bitrix_id, name, role),
-                    )
-                elif len(existing) != 1 or existing[0]["telegram_id"] != telegram_id or existing[0]["bitrix_id"] != bitrix_id:
-                    raise RuntimeError(f"Конфликт привязки сотрудника {name}; автоматическое изменение отменено.")
 
     @staticmethod
     def row(db, sql, args=()):
@@ -257,10 +244,11 @@ class Store:
                 return 0
             changed = 0
             for item in external_tasks:
+                # Each daily plan keeps its own CRM snapshot. An entry in an
+                # earlier day (even a closed one) must not block a new deadline.
                 existing = db.execute(
-                    "SELECT t.*,p.status AS plan_status FROM tasks t "
-                    "JOIN plans p ON p.id=t.plan_id WHERE t.external_id=? ORDER BY t.id LIMIT 1",
-                    (item.external_id,),
+                    "SELECT * FROM tasks WHERE plan_id=? AND external_id=? ORDER BY id LIMIT 1",
+                    (plan_id, item.external_id),
                 ).fetchone()
                 external_status = str(item.external_status or "")
                 task_status = "done" if external_status in {"5", "7"} else "todo"
@@ -281,7 +269,7 @@ class Store:
                         ),
                     )
                     changed += 1
-                elif existing["plan_id"] == plan["id"] and existing["plan_status"] != "closed":
+                else:
                     before = (
                         existing["title"], existing["description"], existing["status"],
                         existing["external_url"], existing["external_status"],
@@ -378,6 +366,15 @@ class Store:
             before = None
             if employee_id is not None:
                 before = self.row(db, "SELECT * FROM employees WHERE id=? AND role='manager'", (employee_id,))
+            # Aliases share the login namespace with primary Telegram IDs.
+            # Keep inactive employees' aliases reserved as well.
+            alias = db.execute(
+                "SELECT employee_id FROM employee_aliases WHERE telegram_id=?",
+                (values["telegram_id"],),
+            ).fetchone()
+            if alias is not None and alias["employee_id"] != employee_id:
+                raise DomainError("Telegram ID уже привязан к другому сотруднику.", 409)
+            if employee_id is not None:
                 db.execute("UPDATE employees SET name=?,telegram_id=?,bitrix_id=?,active=? WHERE id=?",
                            (values["name"], values["telegram_id"], values["bitrix_id"], values["active"], employee_id))
                 if not values["active"]:

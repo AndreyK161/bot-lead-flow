@@ -187,6 +187,19 @@ async def create_session(
         })
     session_id = str(uuid.uuid4())
     with store.db() as conn:
+        # A write to this actor's guard row serializes creators across workers
+        # in both PostgreSQL and SQLite. No CRM request runs while it is held.
+        conn.execute(
+            "INSERT INTO dialer_session_locks(telegram_id) VALUES (?) "
+            "ON CONFLICT(telegram_id) DO UPDATE SET telegram_id=excluded.telegram_id",
+            (telegram_id,),
+        )
+        existing = conn.execute(
+            "SELECT id FROM dialer_sessions WHERE telegram_id=? AND status IN ('active','paused') LIMIT 1",
+            (telegram_id,),
+        ).fetchone()
+        if existing:
+            raise DialerError("Сначала завершите или отмените текущую очередь.", 409)
         conn.execute(
             """INSERT INTO dialer_sessions(
                id,telegram_id,bitrix_user_id,manager_name,entity_type,date_from,date_to,

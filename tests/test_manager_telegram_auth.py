@@ -172,6 +172,23 @@ class ManagerTelegramCookieTests(unittest.TestCase):
             connection.execute("UPDATE employees SET active=0 WHERE telegram_id=?", (self.telegram_id,))
         self.assertEqual(self.client.get("/manager/api/me").status_code, 403)
 
+    def test_employee_alias_conflicts_return_409_and_preserve_existing_login(self):
+        self.login()
+        employee = api.store.actor(7939114214)
+        for method, path in (
+            ("POST", "/manager/api/employees"),
+            ("PATCH", f"/manager/api/employees/{employee['id']}"),
+        ):
+            with self.subTest(method=method):
+                body = {"name": "Conflicting employee", "telegram_id": 399005637, "bitrix_id": 999}
+                if method == "PATCH":
+                    body["active"] = True
+                response = self.client.request(method, path, json=body)
+                self.assertEqual(response.status_code, 409)
+                self.assertEqual(response.json(), {"detail": "Telegram ID уже привязан к другому сотруднику."})
+        self.assertEqual(api.store.actor(399005637)["id"], api.store.actor(8306778724)["id"])
+        self.assertEqual(api.store.actor(7939114214)["id"], employee["id"])
+
     def test_logout_removes_the_browser_cookie_and_next_request_is_anonymous(self):
         self.login()
         self.assertEqual(self.client.post("/manager/api/auth/logout").status_code, 200)

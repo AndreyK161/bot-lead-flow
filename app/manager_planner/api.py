@@ -164,7 +164,9 @@ def create_app() -> FastAPI:
             except InvalidTelegramLogin as exc:
                 raise HTTPException(401, str(exc)) from None
             return telegram_actor(telegram_id)
-        if telegram_session:
+        # Explicit credentials select the identity; cookies are used only
+        # when no Authorization header was supplied. Never fall back on failure.
+        if telegram_session and authorization is None:
             try:
                 telegram_id = validate_web_session(telegram_session, settings.telegram_bot_token)
             except InvalidTelegramLogin as exc:

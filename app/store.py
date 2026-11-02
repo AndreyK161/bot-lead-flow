@@ -145,6 +145,9 @@ def _schema(*, postgres: bool) -> str:
         );
         CREATE INDEX IF NOT EXISTS idx_megafon_calls_phone_started
             ON megafon_calls(client_phone,started_at);
+        CREATE TABLE IF NOT EXISTS dialer_session_locks (
+            telegram_id BIGINT PRIMARY KEY
+        );
         CREATE TABLE IF NOT EXISTS dialer_sessions (
             id TEXT PRIMARY KEY,
             telegram_id BIGINT NOT NULL,

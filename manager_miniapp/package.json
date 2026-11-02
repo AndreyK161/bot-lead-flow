@@ -8,6 +8,9 @@
     "build": "tsc --noEmit && vite build",
     "preview": "vite preview --host 127.0.0.1",
     "test:ui": "node tests/ui.cjs",
+    "test:navigation": "node --test tests/navigation.cjs",
+    "test:profile": "node --test tests/profile.cjs",
+    "test:login": "node --test tests/login-recovery.cjs",
     "test:api": "node --test tests/api.cjs"
   },
   "dependencies": {

@@ -49,11 +49,18 @@ export default function App({ client = api, demo = false }: { client?: Client; d
   const [requests, setRequests] = useState<GoalRequest[]>([]);
   const [distributions, setDistributions] = useState<Array<{ id: string; day?: string; employee_id?: number; employee_name: string; status: string; reason: string; count: number | null; dates: string[] }>>([]);
   const [crm, setCrm] = useState<CrmSummary>();
-  const [performance, setPerformance] = useState<CrmPerformance>();
+  const [loadedPerformance, setPerformance] = useState<CrmPerformance>();
   const [profileStart, setProfileStart] = useState('');
   const [profileEnd, setProfileEnd] = useState('');
   const [profileLoading, setProfileLoading] = useState(false);
   const [profileError, setProfileError] = useState('');
+  const performance = loadedPerformance?.period.start === profileStart && loadedPerformance?.period.end === profileEnd
+    ? loadedPerformance : undefined;
+  const performanceVersion = useRef(0);
+  const profileView = useMemo(() => ({ client, me, section, profileStart, profileEnd }),
+    [client, me, section, profileStart, profileEnd]);
+  const currentProfileView = useRef(profileView);
+  currentProfileView.current = profileView;
   const [dialer, setDialer] = useState<DialerPayload | null>();
   const [dialerFilters, setDialerFilters] = useState<DialerFilters>();
   const [dialerLoading, setDialerLoading] = useState(false);
@@ -169,17 +176,26 @@ export default function App({ client = api, demo = false }: { client?: Client; d
   useEffect(() => { if (!toast) return; const id = setTimeout(() => setToast(''), 4000); return () => clearTimeout(id); }, [toast]);
 
   const loadPerformance = useCallback(async () => {
+    const version = ++performanceVersion.current;
+    const current = () => version === performanceVersion.current && profileView === currentProfileView.current;
+    setPerformance(undefined);
+    setProfileError('');
+    setProfileLoading(false);
     if (!me || supervisor || !profileStart || !profileEnd) return;
     if (profileStart > profileEnd) { setProfileError('Дата начала не может быть позже даты окончания.'); return; }
-    setProfileLoading(true); setProfileError('');
+    setProfileLoading(true);
     try {
       const params = new URLSearchParams({ start: profileStart, end: profileEnd });
-      setPerformance(await client<CrmPerformance>(`/crm/performance?${params}`));
-    } catch (e) { setProfileError((e as Error).message); }
-    finally { setProfileLoading(false); }
-  }, [client, me, supervisor, profileStart, profileEnd]);
+      const result = await client<CrmPerformance>(`/crm/performance?${params}`);
+      if (current()) setPerformance(result);
+    } catch (e) { if (current()) setProfileError((e as Error).message); }
+    finally { if (current()) setProfileLoading(false); }
+  }, [client, me, supervisor, profileStart, profileEnd, profileView]);
 
-  useEffect(() => { if (section === 'profile') void loadPerformance(); }, [section, loadPerformance]);
+  useEffect(() => {
+    if (section === 'profile') void loadPerformance();
+    return () => { performanceVersion.current++; };
+  }, [section, loadPerformance]);
 
   const loadDialer = useCallback(async (quiet = false) => {
     if (!me) return;
@@ -231,6 +247,21 @@ export default function App({ client = api, demo = false }: { client?: Client; d
     } catch (e) { setError((e as Error).message); }
     finally { setBusy(false); }
   }
+  function navigate(destination: string) {
+    if (destination === 'home' && me) {
+      const homeEmployeeId = supervisor ? undefined : me.user.id;
+      if (day !== me.today || employeeId !== homeEmployeeId) {
+        setEmployeeId(homeEmployeeId);
+        setDay(me.today);
+        setPlan(undefined);
+        setPlans([]);
+        setLoading(true);
+      }
+    }
+    setSection(destination);
+    setShowAudit(false);
+  }
+
   function selectPlan(p: Plan, destination = 'plan') { setEmployeeId(p.employee_id); setDay(p.day); setSection(destination); setShowAudit(false); }
   const createPlan = (fromPrevious: boolean) => act('/plans', 'POST', { day, employee_id: employeeId, from_previous: fromPrevious }, 'План создан');
   const tasks = plan?.tasks || [];
@@ -239,7 +270,7 @@ export default function App({ client = api, demo = false }: { client?: Client; d
   const pending = requests.filter(r => r.status === 'pending').length;
   const tabs = supervisor ? [['home', 'Обзор отдела'], ['people', 'Сотрудники'], ['calls', 'Обзвон'], ['plan', 'Планы'], ['results', 'Прогресс'], ['requests', 'Согласования'], ['history', 'История'], ['reports', 'Отчёты']] : [['home', 'Главная'], ['profile', 'Мой профиль'], ['calls', 'Обзвон'], ['plan', 'Мой план'], ['tasks', 'Задачи'], ['results', 'Мои результаты'], ['history', 'История']];
 
-  if (!me) return <div className="welcome"><div className="brand-mark"><Icon name="plan" size={32}/></div><p className="eyebrow">ОТДЕЛ ПРОДАЖ</p><h1>Хороший день<br/>начинается с плана.</h1><p>{loading ? 'Открываем ваше рабочее пространство…' : error}</p>{!loading && <button onClick={() => window.location.reload()}>Попробовать снова</button>}<span className="muted">Планы, задачи и результаты — в одном месте</span></div>;
+  if (!me) return <div className="welcome"><div className="brand-mark"><Icon name="plan" size={32}/></div><p className="eyebrow">ОТДЕЛ ПРОДАЖ</p><h1>Хороший день<br/>начинается с плана.</h1><p>{loading ? 'Открываем ваше рабочее пространство…' : error}</p>{!loading && <div className="actions"><button onClick={() => window.location.reload()}>Попробовать снова</button>{!isTelegramSession() && <button className="secondary" onClick={() => void webLogout()}>Вернуться ко входу</button>}</div>}<span className="muted">Планы, задачи и результаты — в одном месте</span></div>;
 
   const renderSummary = () => <div className="metrics">
     <div><span>Задачи</span><strong>{plan?.summary.done || 0}<small> / {tasks.length}</small></strong><span>выполнено</span></div>
@@ -338,14 +369,14 @@ export default function App({ client = api, demo = false }: { client?: Client; d
 
   return <div className="shell">
     {import.meta.env.DEV && demo && <div className="demo-banner">ДЕМОНСТРАЦИЯ · Пример интерфейса, данные вымышлены · <a href="/preview.html?role=manager">Менеджер</a> / <a href="/preview.html?role=supervisor">Руководитель</a></div>}
-    <div className="workspace"><aside className="sidebar"><button className="brand" onClick={() => setSection('home')}><span className="brand-mark">П</span><span><b>План дня</b><small>РАБОЧЕЕ ПРОСТРАНСТВО</small></span></button><p className="nav-caption">{supervisor ? 'УПРАВЛЕНИЕ ОТДЕЛОМ' : 'ЛИЧНЫЙ КАБИНЕТ'}</p><nav aria-label="Разделы">{tabs.map(([key, title]) => <button key={key} className={section === key ? 'active' : ''} onClick={() => { setSection(key); setShowAudit(false); }}><Icon name={key === 'reports' ? 'results' : key === 'profile' ? 'people' : key}/><span>{title}</span>{key === 'requests' && pending > 0 && <em>{pending}</em>}</button>)}</nav><div className="sidebar-bottom"><span className="connection-dot"/>Lead Flow подключён<small>{me.crm.connected ? 'Bitrix24 и телефония доступны' : me.crm.message}</small></div><button className="profile" onClick={() => !supervisor && setSection('profile')}><div className="avatar">{me.user.name[0]}</div><div><b>{me.user.name}</b><span>{supervisor ? 'Руководитель' : 'Менеджер · открыть профиль'}</span></div></button></aside>
+    <div className="workspace"><aside className="sidebar"><button className="brand" onClick={() => navigate('home')}><span className="brand-mark">П</span><span><b>План дня</b><small>РАБОЧЕЕ ПРОСТРАНСТВО</small></span></button><p className="nav-caption">{supervisor ? 'УПРАВЛЕНИЕ ОТДЕЛОМ' : 'ЛИЧНЫЙ КАБИНЕТ'}</p><nav aria-label="Разделы">{tabs.map(([key, title]) => <button key={key} className={section === key ? 'active' : ''} onClick={() => navigate(key)}><Icon name={key === 'reports' ? 'results' : key === 'profile' ? 'people' : key}/><span>{title}</span>{key === 'requests' && pending > 0 && <em>{pending}</em>}</button>)}</nav><div className="sidebar-bottom"><span className="connection-dot"/>Lead Flow подключён<small>{me.crm.connected ? 'Bitrix24 и телефония доступны' : me.crm.message}</small></div><button className="profile" onClick={() => !supervisor && setSection('profile')}><div className="avatar">{me.user.name[0]}</div><div><b>{me.user.name}</b><span>{supervisor ? 'Руководитель' : 'Менеджер · открыть профиль'}</span></div></button></aside>
     <div className="main-shell"><header className="topbar"><span>Рабочее пространство <span className="crumb">/ {tabs.find(t => t[0] === section)?.[1]}</span></span><div><span className="top-date">{dateLabel(me.today)}</span>{!isTelegramSession() && <button className="quiet web-logout" onClick={webLogout}>Выйти</button>}<span className="avatar small">{me.user.name[0]}</span></div></header><main className="page-content">
       <div className="page-title"><div><p className="eyebrow">{supervisor ? 'КОМАНДА И РЕЗУЛЬТАТ' : 'РАБОЧЕЕ ПРОСТРАНСТВО'}</p><h1>{tabs.find(t => t[0] === section)?.[1]}</h1></div><button className="quiet" disabled={busy || loading || profileLoading || dialerLoading} onClick={() => section === 'profile' ? void loadPerformance() : section === 'calls' ? void loadDialer() : refresh().catch(e => setError(e.message))}>Обновить</button></div>
       {error && <div className="error" role="alert">{error}<button className="icon-button" aria-label="Закрыть ошибку" onClick={() => setError('')}><Icon name="close"/></button></div>}
       {Object.entries(loadErrors).map(([key, message]) => <div className="error" role="alert" key={key}><span>{({ employees: 'Сотрудники', plans: 'Планы', requests: 'Согласования', distributions: 'Уведомления', history: 'История', crm: 'Bitrix24 и звонки' } as Record<string, string>)[key]}: {message}</span><button className="secondary" onClick={() => void refresh(key)}>Повторить загрузку</button></div>)}
       {toast && <div className="toast" role="status"><Icon name="check"/>{toast}</div>}
 
-      {section === 'home' ? renderDashboard() : section === 'profile' && !supervisor ? renderProfile() : section === 'calls' ? renderDialer() : section === 'people' && supervisor ? <>
+      {section === 'home' ? (loading ? <div className="empty"><div className="spinner"/><p>Загружаем планы…</p></div> : loadErrors.plans ? <p className="notice">Планы не удалось загрузить. Повторите загрузку выше.</p> : renderDashboard()) : section === 'profile' && !supervisor ? renderProfile() : section === 'calls' ? renderDialer() : section === 'people' && supervisor ? <>
         <section className="hero"><p className="eyebrow">ВМЕСТЕ К ЦЕЛИ</p><h2>У каждого — ясный план.<br/>У вас — общая картина.</h2><p>{employeesLoaded ? `${employees.filter(e => e.active).length} сотрудника в команде` : loadErrors.employees ? 'Сотрудники не загружены' : 'Загрузка сотрудников'}</p><button className="light" onClick={() => setModal({ type: 'employee' })}><Icon name="plus"/>Добавить сотрудника</button></section>
         <div className="section-heading"><h2>Команда</h2><span className="muted">{dateLabel(me.today)}</span></div>
         <div className="employee-grid">{employees.map(e => <section className="card employee" key={e.id}><div className="row"><div className="avatar">{e.name[0]}</div><div><h3>{e.name}</h3><span className="muted">{!e.active ? 'Доступ выключен' : e.telegram_id ? 'Менеджер' : 'Ожидает подключения Telegram'}</span></div></div><div className="actions"><button className="secondary" onClick={() => { setEmployeeId(e.id); setDay(me.today); setSection('plan'); }}>Открыть план <Icon name="arrow"/></button><button className="quiet" onClick={() => setModal({ type: 'employee', employee: e })}>Изменить</button></div></section>)}</div>

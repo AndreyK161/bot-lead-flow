@@ -1,4 +1,6 @@
+import asyncio
 import tempfile
+import threading
 import unittest
 from datetime import date
 from types import SimpleNamespace
@@ -28,7 +30,7 @@ class DialerTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         self.settings_patch.stop(); self.store_patch.stop(); self.tmp.cleanup()
 
-    async def create_queue(self):
+    async def create_queue(self, telegram_id=100):
         client = AsyncMock()
         client.get_dialer_leads.return_value = [{
             "ID": "42", "TITLE": "Лид 42", "NAME": "Анна", "LAST_NAME": "Иванова",
@@ -40,10 +42,62 @@ class DialerTests(unittest.IsolatedAsyncioTestCase):
         client.get_contacts_full_by_ids.return_value = []
         with patch("app.dialer.BitrixClient", return_value=client):
             return await dialer.create_session(
-                telegram_id=100, bitrix_user_id="110", manager_name="Анна",
+                telegram_id=telegram_id, bitrix_user_id="110", manager_name="Анна",
                 entity_type="lead", date_from=date(2026, 10, 29), date_to=date(2026, 10, 29),
                 category_id=None, stage_ids=["IN_PROCESS"], auto_advance=True,
             )
+
+    async def test_concurrent_requests_create_only_one_active_queue(self):
+        # Initialize before starting workers, as the application does at startup.
+        store.rows("SELECT id FROM dialer_sessions")
+        # Separate event loops and DB connections model independent workers.
+        both_read_empty = threading.Barrier(2)
+        async def fetch_leads(*args):
+            await asyncio.to_thread(both_read_empty.wait, 5)
+            return [{"ID": "42", "TITLE": "Test lead", "PHONE": [{"VALUE": "+79991234567"}]}]
+        client = AsyncMock()
+        client.get_dialer_leads.side_effect = fetch_leads
+        client.get_lead_statuses.return_value = []
+        client.get_contacts_full_by_ids.return_value = []
+        async def create():
+            return await dialer.create_session(
+                telegram_id=100, bitrix_user_id="110", manager_name="Test manager",
+                entity_type="lead", date_from=date(2026, 10, 29), date_to=date(2026, 10, 29),
+                category_id=None, stage_ids=[], auto_advance=True,
+            )
+        with patch("app.dialer.BitrixClient", return_value=client):
+            results = await asyncio.gather(
+                asyncio.to_thread(lambda: asyncio.run(create())),
+                asyncio.to_thread(lambda: asyncio.run(create())),
+                return_exceptions=True,
+            )
+        queues = [result for result in results if isinstance(result, dict)]
+        errors = [result for result in results if isinstance(result, Exception)]
+        self.assertEqual(len(queues), 1, results)
+        self.assertEqual(len(errors), 1, results)
+        self.assertIsInstance(errors[0], dialer.DialerError)
+        self.assertEqual(errors[0].status, 409)
+        self.assertEqual(len(store.rows("SELECT id FROM dialer_sessions WHERE telegram_id=? AND status IN ('active','paused')", (100,))), 1)
+        self.assertEqual(len(store.rows("SELECT id FROM dialer_queue_items")), 1)
+        # Cancelling releases the slot; a persistent guard row must not block it.
+        dialer.cancel(queues[0]["session"]["id"], 100)
+        replacement = await self.create_queue()
+        self.assertEqual(replacement["session"]["status"], "active")
+
+    async def test_paused_queue_blocks_creation_until_cancelled(self):
+        payload = await self.create_queue()
+        store.execute("UPDATE dialer_sessions SET status='paused' WHERE id=?", (payload["session"]["id"],))
+        with self.assertRaises(dialer.DialerError) as error:
+            await self.create_queue()
+        self.assertEqual(error.exception.status, 409)
+        dialer.cancel(payload["session"]["id"], 100)
+        self.assertEqual((await self.create_queue())["session"]["status"], "active")
+
+    async def test_another_user_can_create_queue_while_first_is_active(self):
+        first = await self.create_queue(100)
+        second = await self.create_queue(200)
+        self.assertNotEqual(first["session"]["id"], second["session"]["id"])
+        self.assertEqual(second["session"]["status"], "active")
 
     async def test_queue_is_durable_and_skips_entities_without_phone(self):
         payload = await self.create_queue()
