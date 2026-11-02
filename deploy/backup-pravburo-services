@@ -31,6 +31,7 @@ dump_container_database() {
 
 dump_container_database "call-tracker-postgres-1" "call-tracker"
 dump_container_database "leadflow-postgres-1" "leadflow"
+dump_container_database "supportflow_postgres" "megafon-calls"
 
 # The Pravburo chatbot database is reached through WireGuard. Read its current
 # connection string from the running bot so a stale on-disk env file cannot
@@ -49,24 +50,11 @@ docker run --rm --network host \
 chmod 600 "${backup_root}/${central_name}.partial"
 mv "${backup_root}/${central_name}.partial" "${backup_root}/${central_name}"
 
-# SQLite online backup keeps the Megafon database consistent while webhooks
-# are still being received.
-megafon_container_dump="/tmp/megafon-calls-${stamp}.sqlite3"
-megafon_partial="${backup_root}/megafon-calls-${stamp}.sqlite3.partial"
-megafon_final="${backup_root}/megafon-calls-${stamp}.sqlite3"
-docker exec megafon_call_stats python -c \
-    "import sqlite3; source=sqlite3.connect('/app/data/call_stats.sqlite3'); target=sqlite3.connect('${megafon_container_dump}'); source.backup(target); target.close(); source.close()"
-docker exec megafon_call_stats python -c \
-    "import sqlite3; db=sqlite3.connect('${megafon_container_dump}'); assert db.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'; db.close()"
-docker cp "megafon_call_stats:${megafon_container_dump}" "$megafon_partial" >/dev/null
-docker exec megafon_call_stats rm -f -- "$megafon_container_dump"
-chmod 600 "$megafon_partial"
-mv "$megafon_partial" "$megafon_final"
-
 find "$backup_root" -maxdepth 1 -type f -mtime +30 \
     \( -name 'call-tracker-*.dump' \
        -o -name 'leadflow-*.dump' \
        -o -name 'pravburo-central-*.dump' \
+       -o -name 'megafon-calls-*.dump' \
        -o -name 'megafon-calls-*.sqlite3' \) -delete
 
 printf 'Pravburo service backups completed at %s\n' "$stamp"
