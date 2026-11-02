@@ -26,7 +26,9 @@ def deliveries(deal_id: str) -> list[dict]:
 
 async def render(deal: dict, *, is_junk: bool = False) -> str:
     client = BitrixClient()
-    contact = await client.get_contact(deal["CONTACT_ID"]) if deal.get("CONTACT_ID") else None
+    # Bitrix uses the string "0" when no contact is attached to the deal.
+    contact_id = str(deal.get("CONTACT_ID") or "").strip()
+    contact = await client.get_contact(contact_id) if contact_id and contact_id != "0" else None
     source_name = await client.get_source_name(deal.get("SOURCE_ID", ""))
     assigned_name = await client.get_user_name(str(deal.get("ASSIGNED_BY_ID") or ""))
     exact_lead_id = str(deal.get("LEAD_ID") or "") or None

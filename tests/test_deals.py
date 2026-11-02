@@ -42,6 +42,24 @@ class DealTrackingTests(unittest.IsolatedAsyncioTestCase):
         self.assertIn('+79990000000',text)
         self.assertIn('/crm/deal/details/101/',text)
 
+    async def test_zero_string_contact_does_not_block_deal_delivery(self):
+        self.client.get_deal.return_value['CONTACT_ID'] = '0'
+        self.client.get_contact.side_effect = BitrixApiError('Synthetic contact zero error')
+        self.assertTrue(await deals.track('101'))
+        self.client.get_contact.assert_not_awaited()
+        self.assertEqual(self.send.await_count, 2)
+        self.assertEqual(len(deals.deliveries('101')), 2)
+        self.assertEqual(store.rows('SELECT dirty FROM deal_notifications')[0]['dirty'], 0)
+
+    async def test_missing_and_padded_zero_contacts_are_not_requested(self):
+        for contact_id in (None, 0, '', ' 0 '):
+            with self.subTest(contact_id=contact_id):
+                self.client.get_contact.reset_mock()
+                deal = {**self.client.get_deal.return_value, 'CONTACT_ID': contact_id}
+                text = await deals.render(deal)
+                self.client.get_contact.assert_not_awaited()
+                self.assertIn('/crm/deal/details/101/', text)
+
     async def test_ignores_other_pipeline(self):
         self.client.get_deal.return_value['CATEGORY_ID']='6'
         self.assertFalse(await deals.track('101'))
