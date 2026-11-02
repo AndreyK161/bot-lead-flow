@@ -16,9 +16,8 @@ from apps.bot.backend import store
 from apps.bot.backend import planner_access
 from apps.bot.backend.bitrix_client import BitrixClient
 from apps.bot.backend.distribution import PERIODS, Distribution, ManagerAllocation, best_distributions, parse_manual_date, previous_days
-from apps.planner.backend import api as manager_api
-from apps.planner.backend.distribution_import import import_snapshot
-from apps.planner.backend.distribution_queue import BINDINGS
+from apps.shared.planner_outbox import publish
+from apps.shared.distributions import BINDINGS
 from apps.bot.backend.sales_team import assignable_sales_users, user_name
 from apps.bot.backend.telegram_client import answer_callback_query, edit_message_text, send_telegram_message
 
@@ -424,10 +423,12 @@ async def handle_callback(callback_query: dict, settings) -> bool:
             "variant_index": variant_index, "variant_id": identifier,
             "stage_id": "IN_PROCESS", "allocations": allocations, "total": len(seen_leads),
         }
-        result = import_snapshot(manager_api.store, snapshot, {user_id})
+        result = publish(snapshot, {user_id})
         await send_telegram_message(
             "✅ Распределение импортировано в Planner. Задачи добавлены менеджерам."
             if result["status"] == "imported"
+            else "✅ Распределение сохранено. Planner добавит задачи после обработки."
+            if result["status"] == "pending"
             else "⚠️ Распределение сохранено для проверки, задачи не созданы.",
             chat_id=chat_id,
         )

@@ -1,5 +1,5 @@
 [Unit]
-Description=bot-lead-flow
+Description=Lead Flow bot and webhook workers
 After=network.target
 
 [Service]

@@ -74,3 +74,35 @@ def distribution_notices(store, actor, employee_id=None):
             for row in db.execute("SELECT id FROM import_attempts WHERE status='error'"):
                 result.append({"id": row["id"], "status": "error", "reason": "import_retry", "employee_name": "Ошибка импорта — повторяем автоматически", "dates": [], "count": None})
         return result
+
+
+def outbox_sync_once(store, authorized_ids):
+    """Commit locally before acknowledging; retries after a crash are idempotent."""
+    from apps.shared import planner_outbox
+    results = []
+    for row in planner_outbox.pending():
+        identifier = row["distribution_id"]
+        try:
+            snapshot = json.loads(row["payload"])
+            if snapshot["distribution_id"] != identifier or snapshot["workday"] != row["workday"] or validate(snapshot) != row["sha256"]:
+                raise ValueError("Invalid distribution message")
+            result = import_snapshot(store, snapshot, authorized_ids)
+            planner_outbox.acknowledge(identifier, result["status"])
+            results.append(result["status"])
+        except Exception:
+            # Keep the message pending, including a failure after the local commit.
+            planner_outbox.record_failure(identifier)
+            logger.warning("Planner distribution delivery will be retried id=%s", identifier)
+            results.append("error")
+    return results
+
+
+async def outbox_sync_loop(store, authorized_ids, interval=5):
+    if interval <= 0:
+        raise ValueError("Positive polling interval required")
+    while True:
+        try:
+            await asyncio.to_thread(outbox_sync_once, store, authorized_ids)
+        except Exception:
+            logger.warning("Planner distribution outbox temporarily unavailable")
+        await asyncio.sleep(interval)

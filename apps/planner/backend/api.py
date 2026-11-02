@@ -34,7 +34,7 @@ TELEGRAM_SESSION_COOKIE = "planner_telegram_session"
 
 static_path = Path(__file__).resolve().parent.parent / "static"
 # Configuration is deliberately not loaded at import time: the main test suite
-# patches it after importing apps.bot.backend.main. No database is opened before initialize().
+# patches it after import. No database is opened before initialize().
 store = Store(Path("data/manager_planner.sqlite3"))
 
 

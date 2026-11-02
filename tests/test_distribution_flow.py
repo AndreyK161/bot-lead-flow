@@ -1,6 +1,6 @@
 import tempfile
 import unittest
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
@@ -23,6 +23,29 @@ class DistributionFlowTests(unittest.IsolatedAsyncioTestCase):
     async def asyncTearDown(self):
         self.store_patch.stop()
         self.tmp.cleanup()
+
+    async def test_confirmation_is_persisted_for_planner_without_importing_it(self):
+        from apps.shared import planner_outbox
+        previous_day = datetime.now(distribution_flow.MOSCOW).date() - timedelta(days=1)
+        variant = distribution_flow.best_distributions({previous_day: 1}, ['Яна'])[0]
+        store.save_distribution_session(1297686797, 'confirmation', 'result', {
+            'managers': [{'bitrix_id': '110', 'name': 'Яна'}], 'selected': [0],
+            'stage_ids': ['IN_PROCESS'], 'variants': [distribution_flow._serialize_variant(variant)],
+            'variant_index': 0,
+        })
+        callback = {
+            'id': 'cb', 'from': {'id': 1297686797}, 'data': 'dist:confirmation:confirm',
+            'message': {'chat': {'id': 1297686797}, 'message_id': 10},
+        }
+        client = AsyncMock()
+        client.get_distribution_leads.return_value = [SimpleNamespace(id=10, stage_id='IN_PROCESS')]
+        with patch('apps.bot.backend.distribution_flow.BitrixClient', return_value=client), \
+             patch('apps.bot.backend.distribution_flow.answer_callback_query', new=AsyncMock()), \
+             patch('apps.bot.backend.distribution_flow.send_telegram_message', new=AsyncMock()) as send:
+            self.assertTrue(await distribution_flow.handle_callback(callback, self.settings))
+        self.assertEqual(len(planner_outbox.pending()), 1)
+        self.assertIn('сохранено', send.await_args.args[0])
+        self.assertNotIn('импортировано', send.await_args.args[0])
 
     async def test_start_persists_session_and_renders_real_sales_managers(self):
         with patch('apps.bot.backend.distribution_flow._sales_managers', new=AsyncMock(return_value=self.managers)), \

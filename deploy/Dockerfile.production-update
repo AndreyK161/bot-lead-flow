@@ -1,4 +1,5 @@
-FROM bot-lead-flow-bot-lead-flow:latest
+# Bot-only overlay. Build Planner separately with Dockerfile --target planner.
+FROM bot-lead-flow-bot:latest
 
 WORKDIR /app
 COPY apps ./apps

@@ -52,6 +52,14 @@ def _schema(*, postgres: bool) -> str:
             payload_json TEXT NOT NULL,
             updated_at {timestamp} DEFAULT CURRENT_TIMESTAMP
         );
+        CREATE TABLE IF NOT EXISTS planner_distribution_outbox (
+            distribution_id TEXT PRIMARY KEY, workday TEXT NOT NULL UNIQUE,
+            payload TEXT NOT NULL, sha256 TEXT NOT NULL,
+            status TEXT NOT NULL DEFAULT 'pending' CHECK(status IN ('pending','imported','review')),
+            attempts INTEGER NOT NULL DEFAULT 0, last_error TEXT NOT NULL DEFAULT '',
+            created_at {timestamp} NOT NULL DEFAULT CURRENT_TIMESTAMP,
+            processed_at {timestamp}
+        );
         CREATE TABLE IF NOT EXISTS distribution_reminders (
             chat_id BIGINT NOT NULL,
             thread_id BIGINT NOT NULL DEFAULT 0,
@@ -262,6 +270,9 @@ def _initialize_sqlite(conn: sqlite3.Connection) -> None:
 
 
 def _initialize_postgres(conn) -> None:
+    # Bot and Planner may start independently or simultaneously against one DB.
+    # Serialize schema setup across processes, not just threads in this worker.
+    conn.execute("SELECT pg_advisory_xact_lock(718245019603)")
     for statement in _schema(postgres=True).split(";"):
         if statement.strip():
             conn.execute(statement)

@@ -24,6 +24,7 @@ TABLES = (
     "deal_notifications",
     "deal_deliveries",
     "metadata",
+    "planner_distribution_outbox",
     "seen_leads",
     "seen_lead_phones",
     "crm_items",

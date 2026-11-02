@@ -15,7 +15,34 @@ services:
       retries: 10
 
   bot-lead-flow:
-    build: .
+    container_name: leadflow-bot
+    image: ${BOT_IMAGE:-bot-lead-flow-bot:latest}
+    build:
+      context: .
+      target: bot
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      DATABASE_URL: postgresql://bot_lead_flow:${POSTGRES_PASSWORD}@postgres:5432/bot_lead_flow
+      LEADFLOW_WEB_AUTH_URL: ${LEADFLOW_WEB_AUTH_URL:-https://tg.prav-buro.ru/api/v1/auth/me}
+    depends_on:
+      postgres:
+        condition: service_healthy
+    ports:
+      - "${APP_BIND:-127.0.0.1}:${APP_PORT:-8080}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
+
+  planner:
+    container_name: leadflow-planner
+    image: ${PLANNER_IMAGE:-bot-lead-flow-planner:latest}
+    build:
+      context: .
+      target: planner
     restart: unless-stopped
     env_file: .env
     environment:
@@ -27,7 +54,13 @@ services:
     volumes:
       - ./data:/app/data
     ports:
-      - "${APP_BIND:-127.0.0.1}:${APP_PORT:-8080}:8000"
+      - "${PLANNER_BIND:-127.0.0.1}:${PLANNER_PORT:-8082}:8000"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 15s
 
 volumes:
   postgres_data:

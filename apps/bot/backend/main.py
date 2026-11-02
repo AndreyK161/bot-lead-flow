@@ -6,14 +6,11 @@ import asyncio
 import hashlib
 import logging
 from contextlib import asynccontextmanager, suppress
-from pathlib import Path
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request, status
 
 from apps.bot.backend import call_tracking, deals, distribution_flow, journal, manual, miniapp, outcomes, period_reports, planner_access, reconcile, reports, stats, store
-from apps.planner.backend.api import app as manager_planner_app, initialize as initialize_manager_planner
-from apps.planner.backend import api as manager_planner_api, sync as planner_distribution_sync
 from apps.bot.backend.bitrix_client import (
     LEAD_PREFERRED_CALL_TIME_FIELD,
     BitrixApiError,
@@ -51,7 +48,6 @@ logging.getLogger("httpcore").setLevel(logging.WARNING)
 async def lifespan(app):
     settings = get_settings()
     planner_access.seed_legacy_identities()
-    initialize_manager_planner()
     menu_user_ids = settings.mini_app_user_id_set | planner_access.enabled_user_ids()
     for account_id in menu_user_ids:
         try:
@@ -68,30 +64,20 @@ async def lifespan(app):
         asyncio.create_task(_bitrix_event_recovery_loop()),
         asyncio.create_task(distribution_flow.reminder_loop(settings)),
     ]
-    legacy_queue = str(getattr(settings, "legacy_distribution_queue_path", "") or "").strip()
-    if legacy_queue:
-        confirmer_ids = getattr(settings, "legacy_distribution_confirmer_id_set", set())
-        if not confirmer_ids:
-            raise RuntimeError("LEGACY_DISTRIBUTION_CONFIRMER_IDS must be explicit when the legacy queue bridge is enabled")
-        tasks.append(asyncio.create_task(planner_distribution_sync.sync_loop(
-            manager_planner_api.store,
-            Path(legacy_queue),
-            confirmer_ids,
-            float(getattr(settings, "legacy_distribution_poll_seconds", 30)),
-        )))
-    yield
-    for task in tasks:
-        task.cancel()
-    for task in tasks:
-        with suppress(asyncio.CancelledError):
-            await task
-    await close_http_client()
+    try:
+        yield
+    finally:
+        for task in tasks:
+            task.cancel()
+        for task in tasks:
+            with suppress(asyncio.CancelledError):
+                await task
+        await close_http_client()
 
 
 app = FastAPI(title="bot-lead-flow", lifespan=lifespan)
 app.include_router(miniapp.router)
 app.include_router(call_tracking.router)
-app.mount("/manager", manager_planner_app)
 
 
 def _mini_app_destination(settings, user_id: int) -> tuple[str, str]:

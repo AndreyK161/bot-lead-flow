@@ -3,7 +3,14 @@ set -eu
 
 backup_dir="/opt/pravburo/bot-lead-flow/backups/automatic"
 container="bot-lead-flow-postgres-1"
-app_container="bot-lead-flow-bot-lead-flow-1"
+# Planner owns the SQLite file. Fall back only to previous combined containers.
+app_container=""
+for candidate in leadflow-planner leadflow-bot-planner bot-lead-flow-bot-lead-flow-1; do
+    if [ "$(docker inspect --format '{{.State.Running}}' "$candidate" 2>/dev/null || true)" = "true" ]; then
+        app_container="$candidate"
+        break
+    fi
+done
 database="bot_lead_flow"
 database_user="bot_lead_flow"
 stamp="$(date -u +%Y%m%dT%H%M%SZ)"
@@ -35,10 +42,15 @@ docker cp "${container}:${container_dump}" "$partial_dump" >/dev/null
 chmod 600 "$partial_dump"
 mv "$partial_dump" "$final_dump"
 
+if [ -z "$app_container" ]; then
+    printf '%s\n' 'PostgreSQL backup created; Planner container is not running; SQLite backup aborted.' >&2
+    exit 1
+fi
+
 # SQLite's online backup API produces a consistent snapshot while the Planner
 # remains available. The source is deliberately the isolated Lead Flow DB.
 docker exec "$app_container" python -c \
-    "import sqlite3; source=sqlite3.connect('/app/data/manager_planner.sqlite3'); target=sqlite3.connect('${container_planner}'); source.backup(target); target.close(); source.close()"
+    "import sqlite3; source=sqlite3.connect('file:/app/data/manager_planner.sqlite3?mode=ro', uri=True); target=sqlite3.connect('${container_planner}'); source.backup(target); target.close(); source.close()"
 docker exec "$app_container" python -c \
     "import sqlite3; db=sqlite3.connect('${container_planner}'); assert db.execute('PRAGMA integrity_check').fetchone()[0] == 'ok'; db.close()"
 docker cp "${app_container}:${container_planner}" "$partial_planner" >/dev/null
