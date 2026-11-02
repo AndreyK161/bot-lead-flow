@@ -11,7 +11,7 @@ from urllib.parse import urlencode
 
 from fastapi import HTTPException
 
-from app import miniapp
+from apps.bot.backend import miniapp
 
 
 BOT_TOKEN = "123456:test-token"
@@ -53,7 +53,7 @@ class MiniAppAuthenticationTests(unittest.TestCase):
             director_user_id_set=set(),
             admin_user_id_set={TEST_USER_ID},
         )
-        with patch("app.miniapp.get_settings", return_value=settings):
+        with patch("apps.bot.backend.miniapp.get_settings", return_value=settings):
             self.assertEqual(miniapp._authorized_user(request), TEST_USER_ID)
 
     def test_rejects_regular_manager(self):
@@ -64,8 +64,8 @@ class MiniAppAuthenticationTests(unittest.TestCase):
             admin_user_id_set=set(),
         )
         with (
-            patch("app.miniapp.get_settings", return_value=settings),
-            patch("app.miniapp.planner_access.enabled_user_ids", return_value=set()),
+            patch("apps.bot.backend.miniapp.get_settings", return_value=settings),
+            patch("apps.bot.backend.miniapp.planner_access.enabled_user_ids", return_value=set()),
         ):
             with self.assertRaises(HTTPException) as ctx:
                 miniapp._authorized_user(request)
@@ -82,9 +82,9 @@ class MiniAppAuthenticationTests(unittest.TestCase):
             super_admin_user_id_set=set(),
         )
         with (
-            patch("app.miniapp.get_settings", return_value=settings),
+            patch("apps.bot.backend.miniapp.get_settings", return_value=settings),
             patch(
-                "app.miniapp.planner_access.enabled_user_ids",
+                "apps.bot.backend.miniapp.planner_access.enabled_user_ids",
                 return_value={supervisor_id},
             ),
         ):
@@ -97,7 +97,7 @@ class MiniAppAuthenticationTests(unittest.TestCase):
             director_user_id_set={TEST_USER_ID}, admin_user_id_set=set(),
             super_admin_user_id_set=set(),
         )
-        with patch("app.miniapp.get_settings", return_value=settings):
+        with patch("apps.bot.backend.miniapp.get_settings", return_value=settings):
             self.assertEqual(miniapp._authorized_user(request), TEST_USER_ID)
 
     def test_authorizes_super_admin_for_calls_section(self):
@@ -107,7 +107,7 @@ class MiniAppAuthenticationTests(unittest.TestCase):
             director_user_id_set=set(), admin_user_id_set=set(),
             super_admin_user_id_set={TEST_USER_ID},
         )
-        with patch("app.miniapp.get_settings", return_value=settings):
+        with patch("apps.bot.backend.miniapp.get_settings", return_value=settings):
             self.assertEqual(miniapp._authorized_user(request), TEST_USER_ID)
 
 
@@ -194,7 +194,7 @@ class MiniAppReportTests(unittest.TestCase):
         self.assertIn("window.setInterval(loadPresence, 60000)", html)
 
     def test_presence_payload_normalizes_statuses(self):
-        with patch("app.miniapp._manager_bitrix_map", return_value={"анна": 42}):
+        with patch("apps.bot.backend.miniapp._manager_bitrix_map", return_value={"анна": 42}):
             payload = miniapp._presence_payload([
                 {
                     "id": 1, "full_name": "Анна", "presence_status": "working",
@@ -215,11 +215,11 @@ class MiniAppReportTests(unittest.TestCase):
 
     def test_manager_bitrix_map_uses_access_registry_and_links(self):
         with (
-            patch("app.miniapp.store.list_planner_access", return_value=[{
+            patch("apps.bot.backend.miniapp.store.list_planner_access", return_value=[{
                 "display_name": "Евгений Гринёв", "bitrix_user_id": "50",
                 "role": "manager", "active": 1,
             }]),
-            patch("app.miniapp.store.list_links", return_value=[{
+            patch("apps.bot.backend.miniapp.store.list_links", return_value=[{
                 "bitrix_name": "Яна Азизова", "bitrix_user_id": "110",
             }]),
         ):
@@ -247,8 +247,8 @@ class MiniAppReportJobTests(unittest.IsolatedAsyncioTestCase):
             return expected
 
         with (
-            patch("app.miniapp._authorized_user", return_value=TEST_USER_ID),
-            patch("app.miniapp._cached_report", side_effect=build),
+            patch("apps.bot.backend.miniapp._authorized_user", return_value=TEST_USER_ID),
+            patch("apps.bot.backend.miniapp._cached_report", side_effect=build),
         ):
             started = await miniapp.start_mini_app_report_job(
                 None, date(2026, 1, 1), date(2026, 12, 31),
@@ -280,10 +280,10 @@ class MiniAppManagerStatsTests(unittest.IsolatedAsyncioTestCase):
         }
         miniapp._manager_stats_cache.clear()
         with (
-            patch("app.miniapp._authorized_user", return_value=TEST_USER_ID),
-            patch("app.miniapp._allowed_manager_ids", return_value={50}),
-            patch("app.miniapp._manager_presence_payload", return_value=presence),
-            patch("app.miniapp.PlannerCRM", return_value=crm),
+            patch("apps.bot.backend.miniapp._authorized_user", return_value=TEST_USER_ID),
+            patch("apps.bot.backend.miniapp._allowed_manager_ids", return_value={50}),
+            patch("apps.bot.backend.miniapp._manager_presence_payload", return_value=presence),
+            patch("apps.bot.backend.miniapp.PlannerCRM", return_value=crm),
         ):
             result = await miniapp.mini_app_manager_stats(
                 None, 50, start=date(2026, 10, 22), end=date(2026, 10, 28),
@@ -295,8 +295,8 @@ class MiniAppManagerStatsTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_rejects_manager_outside_sales_registry(self):
         with (
-            patch("app.miniapp._authorized_user", return_value=TEST_USER_ID),
-            patch("app.miniapp._allowed_manager_ids", return_value={50}),
+            patch("apps.bot.backend.miniapp._authorized_user", return_value=TEST_USER_ID),
+            patch("apps.bot.backend.miniapp._allowed_manager_ids", return_value={50}),
         ):
             with self.assertRaises(HTTPException) as ctx:
                 await miniapp.mini_app_manager_stats(None, 999, date(2026, 10, 28))

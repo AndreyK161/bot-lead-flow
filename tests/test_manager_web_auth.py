@@ -6,9 +6,9 @@ from unittest.mock import patch
 
 from fastapi.testclient import TestClient
 
-from app.manager_planner import api
-from app.manager_planner.auth import issue_web_session
-from app.manager_planner.store import Store
+from apps.planner.backend import api
+from apps.planner.backend.auth import issue_web_session
+from apps.planner.backend.store import Store
 
 
 class FakeResponse:
@@ -48,8 +48,8 @@ class ManagerWebAuthTests(unittest.TestCase):
             leadflow_web_auth_url="http://leadflow.test/api/v1/auth/me",
             leadflow_web_auth_timeout_seconds=1,
         )
-        self.settings_patch = patch("app.manager_planner.api.get_settings", return_value=self.settings)
-        self.http_patch = patch("app.manager_planner.api.httpx.AsyncClient", FakeAsyncClient)
+        self.settings_patch = patch("apps.planner.backend.api.get_settings", return_value=self.settings)
+        self.http_patch = patch("apps.planner.backend.api.httpx.AsyncClient", FakeAsyncClient)
         self.settings_patch.start(); self.http_patch.start()
         self.client = TestClient(api.create_app())
 
@@ -81,7 +81,7 @@ class ManagerWebAuthTests(unittest.TestCase):
             "id": 9, "full_name": "Web manager", "role": "manager",
             "is_active": True, "bitrix_user_id": "110",
         })
-        with patch("app.manager_planner.api.access_registry.authorized_identity", return_value={
+        with patch("apps.planner.backend.api.access_registry.authorized_identity", return_value={
             "role": "supervisor", "bitrix_user_id": None,
         }):
             for case, cookie in cookies.items():
@@ -100,7 +100,7 @@ class ManagerWebAuthTests(unittest.TestCase):
     def test_rejected_authorization_does_not_fall_back_to_valid_cookie(self):
         cookie = issue_web_session(1073597301, self.settings.telegram_bot_token)
         FakeAsyncClient.response = FakeResponse(401, {"detail": "invalid"})
-        with patch("app.manager_planner.api.access_registry.authorized_identity", return_value={
+        with patch("apps.planner.backend.api.access_registry.authorized_identity", return_value={
             "role": "supervisor", "bitrix_user_id": None,
         }):
             for authorization in ("Bearer invalid-token", "Bearer ", "Basic unsupported"):

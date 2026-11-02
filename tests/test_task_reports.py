@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from openpyxl import load_workbook
 
-from app import store, task_reports
+from apps.bot.backend import store, task_reports
 
 
 class FakeClient:
@@ -56,8 +56,8 @@ class TaskReportTests(unittest.IsolatedAsyncioTestCase):
             bitrix_automation_user_id_set={"24"}, megafon_bitrix_users={},
             bitrix_webhook_url="https://example.bitrix24.ru/rest/1/token/",
         )
-        self.settings_patch = patch("app.task_reports.get_settings", return_value=self.settings)
-        self.store_patch = patch("app.store.get_settings", return_value=self.settings)
+        self.settings_patch = patch("apps.bot.backend.task_reports.get_settings", return_value=self.settings)
+        self.store_patch = patch("apps.bot.backend.store.get_settings", return_value=self.settings)
         self.settings_patch.start(); self.store_patch.start()
 
     async def asyncTearDown(self):

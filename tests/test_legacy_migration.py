@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from app.manager_planner.store import Store
+from apps.planner.backend.store import Store
 from scripts.import_legacy_planner_data import ImportRejected, run
 from scripts.migrate_legacy_planner import DATABASES, snapshot
 

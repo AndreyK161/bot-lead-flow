@@ -55,7 +55,7 @@ cp .env.example .env
 Запуск локально:
 
 ```bash
-uvicorn app.main:app --host 0.0.0.0 --port 8000
+uvicorn apps.bot.backend.main:app --host 0.0.0.0 --port 8000
 ```
 
 Эндпоинт: `POST /bitrix/webhook`. Для продакшена сервису нужен публичный
@@ -101,16 +101,28 @@ HTTPS-адрес (Bitrix24 стучится извне) — например, ч
 
 ## Структура проекта
 
+```text
+apps/
+  bot/
+    backend/          # бот, вебхуки, CRM, телефония и общие настройки
+      main.py         # общий ASGI entry point
+      static/         # Telegram-интерфейс отчётов бота
+  planner/
+    backend/          # API и бизнес-правила сайта «План дня»
+    frontend/         # React/TypeScript/Vite, исходники сайта
+    static/           # готовый frontend, включаемый в Docker-образ
+scripts/              # обслуживание и перенос данных
+tests/                # общие Python-тесты
+deploy/               # конфигурации размещения и резервирования
 ```
-app/
-  config.py          # чтение .env через pydantic-settings
-  bitrix_client.py    # запросы к Bitrix REST (crm.lead.get, crm.status.list, user.get)
-  formatter.py         # парсинг полей лида + сборка HTML-сообщения
-  telegram_client.py   # отправка sendMessage в Telegram
-  main.py              # FastAPI-приложение, эндпоинт /bitrix/webhook
-requirements.txt
-.env.example
-```
+
+Python-тесты находятся в `tests/`. Приложения пока запускаются одним процессом:
+`uvicorn apps.bot.backend.main:app`. Он подключает Planner по `/manager/`.
+Frontend сайта собирается отдельно из `apps/planner/frontend/`.
+
+Границы приложений, текущие зависимости и команды описаны в
+[ARCHITECTURE.md](ARCHITECTURE.md). Перенос каталогов не меняет URL,
+настройки окружения и пути существующих баз данных.
 
 ## Тесты
 
@@ -367,18 +379,21 @@ Telegram Mini App продолжает использовать проверен
 добавляется только для существующего Mini App, Telegram web или Lead Flow
 токена; при cookie-входе он отсутствует.
 
-Исходники интерфейса находятся в `manager_miniapp/`. Локальные проверки и сборка:
+Исходники интерфейса находятся в `apps/planner/frontend/`. Локальные проверки и сборка:
 
 ```bash
-cd manager_miniapp
+cd apps/planner/frontend
 npm ci
 npm run test:api
 npm run build
 npm run test:ui
+npm run test:navigation
+npm run test:profile
+npm run test:login
 ```
 
-Vite записывает HTML и assets в `app/static/manager/`. Dockerfile копирует этот
-готовый каталог вместе с `app/`, поэтому frontend собирается до сборки образа.
+Vite записывает HTML и assets в `apps/planner/static/`. Dockerfile копирует этот
+готовый каталог вместе с остальным `apps/`, поэтому frontend собирается до сборки образа.
 Регрессии cookie callback, анонимного доступа, повреждения/истечения сессии и
 отключения сотрудника проверяет `tests/test_manager_telegram_auth.py`.
 

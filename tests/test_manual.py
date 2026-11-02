@@ -5,8 +5,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 import httpx
-from app import manual, store
-from app.bitrix_client import BitrixApiError
+from apps.bot.backend import manual, store
+from apps.bot.backend.bitrix_client import BitrixApiError
 
 
 class ManualMainBotTests(unittest.IsolatedAsyncioTestCase):
@@ -33,9 +33,9 @@ class ManualMainBotTests(unittest.IsolatedAsyncioTestCase):
         self.send=AsyncMock(side_effect=lambda text,**kwargs:{'message_id':100})
         self.edit=AsyncMock()
         self.patches=[
-            patch('app.store.get_settings',return_value=self.settings), patch('app.manual.get_settings',return_value=self.settings),
-            patch('app.manual.BitrixClient',return_value=self.client), patch('app.manual.send_telegram_message',new=self.send),
-            patch('app.manual.edit_message_text',new=self.edit),
+            patch('apps.bot.backend.store.get_settings',return_value=self.settings), patch('apps.bot.backend.manual.get_settings',return_value=self.settings),
+            patch('apps.bot.backend.manual.BitrixClient',return_value=self.client), patch('apps.bot.backend.manual.send_telegram_message',new=self.send),
+            patch('apps.bot.backend.manual.edit_message_text',new=self.edit),
         ]
         for item in self.patches:item.start()
         manual.lock=asyncio.Lock()

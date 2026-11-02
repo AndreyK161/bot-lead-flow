@@ -5,11 +5,11 @@ from datetime import datetime
 from pathlib import Path
 from uuid import uuid4
 
-from app.manager_planner.distribution_import import import_snapshot
-from app.manager_planner.distribution_queue import DistributionQueue
-from app.manager_planner.sync import sync_once
-from app.manager_planner.store import DomainError, Store
-from app.manager_planner.integrations import ExternalTask
+from apps.planner.backend.distribution_import import import_snapshot
+from apps.planner.backend.distribution_queue import DistributionQueue
+from apps.planner.backend.sync import sync_once
+from apps.planner.backend.store import DomainError, Store
+from apps.planner.backend.integrations import ExternalTask
 
 
 class IsolatedManagerPlannerTests(unittest.TestCase):

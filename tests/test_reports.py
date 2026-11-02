@@ -5,8 +5,8 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
-from app import reports, stats, store
-from app.formatter import build_daily_report_body
+from apps.bot.backend import reports, stats, store
+from apps.bot.backend.formatter import build_daily_report_body
 
 
 class BuildDailyReportBodyTests(unittest.TestCase):
@@ -85,8 +85,8 @@ class SendDailyReportsTests(unittest.IsolatedAsyncioTestCase):
             sales_department_id='5',
         )
         self.patches = [
-            patch('app.store.get_settings', return_value=self.settings),
-            patch('app.reports.get_settings', return_value=self.settings),
+            patch('apps.bot.backend.store.get_settings', return_value=self.settings),
+            patch('apps.bot.backend.reports.get_settings', return_value=self.settings),
         ]
         for p in self.patches:
             p.start()
@@ -97,11 +97,11 @@ class SendDailyReportsTests(unittest.IsolatedAsyncioTestCase):
         self.client.get_deal_stages.return_value = [{'STATUS_ID': 'NEW', 'NAME': 'Не обработан'}]
         self.client.get_user_name.return_value = 'Никита Продажников'
         self.client.get_department_users.return_value = [{'ID': '460'}, {'ID': '999'}]
-        self.bitrix_patch = patch('app.reports.BitrixClient', return_value=self.client)
+        self.bitrix_patch = patch('apps.bot.backend.reports.BitrixClient', return_value=self.client)
         self.bitrix_patch.start()
 
         self.send_message = AsyncMock(return_value={'message_id': 1})
-        self.send_patch = patch('app.reports.send_telegram_message', new=self.send_message)
+        self.send_patch = patch('apps.bot.backend.reports.send_telegram_message', new=self.send_message)
         self.send_patch.start()
 
     async def asyncTearDown(self):
@@ -233,7 +233,7 @@ class SendDailyReportsTests(unittest.IsolatedAsyncioTestCase):
 class TodayBoundsTests(unittest.TestCase):
     def test_bounds_span_between_report_cutoffs(self):
         now = datetime(2026, 9, 18, 21, 30, tzinfo=reports.MOSCOW_TZ)
-        with patch('app.stats.get_settings', return_value=SimpleNamespace(
+        with patch('apps.bot.backend.stats.get_settings', return_value=SimpleNamespace(
             daily_stats_time='19:00', daily_stats_timezone='Europe/Moscow',
         )):
             start, end = reports._report_bounds(now)

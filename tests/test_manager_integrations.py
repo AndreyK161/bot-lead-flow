@@ -4,8 +4,8 @@ from datetime import datetime
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from app import store
-from app.manager_planner.integrations import PlannerCRM
+from apps.bot.backend import store
+from apps.planner.backend.integrations import PlannerCRM
 
 
 class PlannerCRMTests(unittest.IsolatedAsyncioTestCase):
@@ -18,8 +18,8 @@ class PlannerCRMTests(unittest.IsolatedAsyncioTestCase):
             megafon_bitrix_users={'101': '110', '102': '50'},
             bitrix_webhook_url='https://portal.example/rest/24/token/',
         )
-        self.settings_patch = patch('app.manager_planner.integrations.get_settings', return_value=self.settings)
-        self.store_patch = patch('app.store.get_settings', return_value=self.settings)
+        self.settings_patch = patch('apps.planner.backend.integrations.get_settings', return_value=self.settings)
+        self.store_patch = patch('apps.bot.backend.store.get_settings', return_value=self.settings)
         self.settings_patch.start(); self.store_patch.start()
         self.client = AsyncMock()
         self.client.get_lead_statuses.return_value = []

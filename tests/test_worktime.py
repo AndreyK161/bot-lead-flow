@@ -5,7 +5,7 @@ from zoneinfo import ZoneInfo
 
 from openpyxl import load_workbook
 
-from app.worktime import build_worktime_payload, build_worktime_workbook
+from apps.bot.backend.worktime import build_worktime_payload, build_worktime_workbook
 
 
 class WorktimeTests(unittest.TestCase):

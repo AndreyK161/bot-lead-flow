@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
-from app import outcomes, stats, store
+from apps.bot.backend import outcomes, stats, store
 
 
 TEST_DIRECTOR_ID = 1297686797
@@ -27,9 +27,9 @@ class OutcomeTrackingTests(unittest.IsolatedAsyncioTestCase):
             director_user_id_set={TEST_DIRECTOR_ID},
         )
         self.patches = [
-            patch("app.store.get_settings", return_value=self.settings),
-            patch("app.stats.get_settings", return_value=self.settings),
-            patch("app.outcomes.get_settings", return_value=self.settings),
+            patch("apps.bot.backend.store.get_settings", return_value=self.settings),
+            patch("apps.bot.backend.stats.get_settings", return_value=self.settings),
+            patch("apps.bot.backend.outcomes.get_settings", return_value=self.settings),
         ]
         for item in self.patches:
             item.start()

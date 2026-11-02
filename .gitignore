@@ -8,6 +8,6 @@ deploy-backups/
 .env.bak-*
 venv/
 .idea
-manager_miniapp/node_modules/
+apps/planner/frontend/node_modules/
 .worktrees/
 leads-and-deals-*.csv

@@ -1,7 +1,7 @@
 import unittest
 from unittest.mock import AsyncMock
 
-from app.bitrix_client import BitrixClient, BitrixApiError
+from apps.bot.backend.bitrix_client import BitrixClient, BitrixApiError
 
 
 class JunkStageTests(unittest.IsolatedAsyncioTestCase):

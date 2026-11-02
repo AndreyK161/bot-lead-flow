@@ -4,8 +4,8 @@ from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from app import reconcile
-from app.bitrix_client import BitrixClient
+from apps.bot.backend import reconcile
+from apps.bot.backend.bitrix_client import BitrixClient
 
 
 class BitrixPaginationTests(unittest.IsolatedAsyncioTestCase):
@@ -33,18 +33,18 @@ class ReconciliationTests(unittest.IsolatedAsyncioTestCase):
             track_deal_category_id="0",
         )
         self.patches = [
-            patch("app.store.get_settings", return_value=self.settings),
-            patch("app.reconcile.get_settings", return_value=self.settings),
+            patch("apps.bot.backend.store.get_settings", return_value=self.settings),
+            patch("apps.bot.backend.reconcile.get_settings", return_value=self.settings),
         ]
         for item in self.patches:
             item.start()
         self.client = AsyncMock()
         self.client.get_leads_modified_between.return_value = [{"ID": "1"}]
         self.client.get_deals_modified_between.return_value = [{"ID": "2", "CATEGORY_ID": "0"}]
-        self.client_patch = patch("app.reconcile.BitrixClient", return_value=self.client)
+        self.client_patch = patch("apps.bot.backend.reconcile.BitrixClient", return_value=self.client)
         self.client_patch.start()
         self.observe = AsyncMock()
-        self.observe_patch = patch("app.reconcile.stats.observe", new=self.observe)
+        self.observe_patch = patch("apps.bot.backend.reconcile.stats.observe", new=self.observe)
         self.observe_patch.start()
 
     async def asyncTearDown(self):

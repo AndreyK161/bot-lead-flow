@@ -6,7 +6,7 @@ from types import SimpleNamespace
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
-from app import call_tracking, store
+from apps.bot.backend import call_tracking, store
 
 
 class FakeTasksClient:
@@ -42,8 +42,8 @@ class CallTrackingTests(unittest.TestCase):
             bitrix_webhook_url="https://example.bitrix24.ru/rest/1/token/",
             track_deal_category_id="0",
         )
-        self.store_patch = patch("app.store.get_settings", return_value=self.settings)
-        self.calls_patch = patch("app.call_tracking.get_settings", return_value=self.settings)
+        self.store_patch = patch("apps.bot.backend.store.get_settings", return_value=self.settings)
+        self.calls_patch = patch("apps.bot.backend.call_tracking.get_settings", return_value=self.settings)
         self.store_patch.start(); self.calls_patch.start()
 
     def tearDown(self):
@@ -66,7 +66,7 @@ class CallTrackingTests(unittest.TestCase):
         self.assertNotIn("must-not-be-stored", str(row))
 
     def test_legacy_numeric_user_map_is_accepted(self):
-        from app.config import Settings
+        from apps.bot.backend.config import Settings
 
         settings = Settings.model_construct(megafon_bitrix_user_map="{101: 42}")
         self.assertEqual(settings.megafon_bitrix_users, {"101": "42"})

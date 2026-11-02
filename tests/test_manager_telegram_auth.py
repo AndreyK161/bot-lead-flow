@@ -10,14 +10,14 @@ from unittest.mock import patch
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from app.manager_planner import api
-from app.manager_planner.auth import (
+from apps.planner.backend import api
+from apps.planner.backend.auth import (
     InvalidTelegramLogin,
     issue_web_session,
     validate_login_widget,
     validate_web_session,
 )
-from app.manager_planner.store import Store
+from apps.planner.backend.store import Store
 
 
 BOT_TOKEN = "123456:test-token"
@@ -78,8 +78,8 @@ class ManagerTelegramAuthTests(unittest.TestCase):
                 "bitrix_user_id": None, "active": True,
             }
             try:
-                with patch("app.manager_planner.api.get_settings", return_value=settings), patch(
-                    "app.manager_planner.api.access_registry.authorized_identity", return_value=identity,
+                with patch("apps.planner.backend.api.get_settings", return_value=settings), patch(
+                    "apps.planner.backend.api.access_registry.authorized_identity", return_value=identity,
                 ):
                     with TestClient(api.create_app()) as client:
                         response = client.post(
@@ -111,9 +111,9 @@ class ManagerTelegramCookieTests(unittest.TestCase):
             leadflow_web_auth_url="",
             leadflow_web_auth_timeout_seconds=1,
         )
-        self.enterContext(patch("app.manager_planner.api.get_settings", return_value=settings))
+        self.enterContext(patch("apps.planner.backend.api.get_settings", return_value=settings))
         self.identity = self.enterContext(patch(
-            "app.manager_planner.api.access_registry.authorized_identity",
+            "apps.planner.backend.api.access_registry.authorized_identity",
             return_value={"role": "supervisor", "bitrix_user_id": None},
         ))
         application = FastAPI()

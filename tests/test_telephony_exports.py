@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from openpyxl import load_workbook
 
-from app import store, telephony_exports
+from apps.bot.backend import store, telephony_exports
 
 
 class FakeClient:
@@ -22,8 +22,8 @@ class TelephonyExportTests(unittest.IsolatedAsyncioTestCase):
             database_path=self.tmp.name + "/db.sqlite", database_url="",
             daily_stats_timezone="Europe/Moscow", megafon_bitrix_users={"706": "110"},
         )
-        self.settings_patch = patch("app.telephony_exports.get_settings", return_value=self.settings)
-        self.store_patch = patch("app.store.get_settings", return_value=self.settings)
+        self.settings_patch = patch("apps.bot.backend.telephony_exports.get_settings", return_value=self.settings)
+        self.store_patch = patch("apps.bot.backend.store.get_settings", return_value=self.settings)
         self.settings_patch.start(); self.store_patch.start()
         store.execute(
             """INSERT INTO megafon_calls

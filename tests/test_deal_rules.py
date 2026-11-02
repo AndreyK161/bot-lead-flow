@@ -3,7 +3,7 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from app import deal_rules, stats
+from apps.bot.backend import deal_rules, stats
 
 
 class DealRulesTests(unittest.IsolatedAsyncioTestCase):
@@ -20,9 +20,9 @@ class DealRulesTests(unittest.IsolatedAsyncioTestCase):
             daily_stats_timezone="Europe/Moscow",
         )
         self.patches = [
-            patch("app.store.get_settings", return_value=self.settings),
-            patch("app.stats.get_settings", return_value=self.settings),
-            patch("app.deal_rules.get_settings", return_value=self.settings),
+            patch("apps.bot.backend.store.get_settings", return_value=self.settings),
+            patch("apps.bot.backend.stats.get_settings", return_value=self.settings),
+            patch("apps.bot.backend.deal_rules.get_settings", return_value=self.settings),
         ]
         for item in self.patches:
             item.start()

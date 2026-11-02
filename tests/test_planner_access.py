@@ -3,14 +3,14 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from app import planner_access, store
+from apps.bot.backend import planner_access, store
 
 
 class PlannerAccessTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.patcher = patch(
-            'app.store.get_settings',
+            'apps.bot.backend.store.get_settings',
             return_value=SimpleNamespace(database_path=self.tmp.name + '/db.sqlite'),
         )
         self.patcher.start()

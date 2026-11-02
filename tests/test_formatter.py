@@ -1,6 +1,6 @@
 import unittest
 
-from app.formatter import (
+from apps.bot.backend.formatter import (
     build_action_keyboard,
     build_assign_keyboard,
     build_lead_notification,

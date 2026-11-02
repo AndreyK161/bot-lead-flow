@@ -4,14 +4,14 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from app import store
+from apps.bot.backend import store
 
 
 class StoreLinkingTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         settings = SimpleNamespace(database_path=self.tmp.name + '/db.sqlite')
-        self.patcher = patch('app.store.get_settings', return_value=settings)
+        self.patcher = patch('apps.bot.backend.store.get_settings', return_value=settings)
         self.patcher.start()
 
     def tearDown(self):

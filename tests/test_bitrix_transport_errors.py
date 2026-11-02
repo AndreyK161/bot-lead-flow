@@ -3,7 +3,7 @@ from unittest.mock import patch
 
 import httpx
 
-from app.bitrix_client import BitrixApiError, BitrixClient, BitrixTransportError
+from apps.bot.backend.bitrix_client import BitrixApiError, BitrixClient, BitrixTransportError
 
 
 class BitrixTransportErrorTests(unittest.IsolatedAsyncioTestCase):
@@ -15,7 +15,7 @@ class BitrixTransportErrorTests(unittest.IsolatedAsyncioTestCase):
 
         http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
         self.addAsyncCleanup(http_client.aclose)
-        with patch("app.bitrix_client._http_client", return_value=http_client):
+        with patch("apps.bot.backend.bitrix_client._http_client", return_value=http_client):
             with self.assertRaises(BitrixApiError) as raised:
                 await BitrixClient(f"https://portal.test/rest/24/{secret}/").get_lead("42")
 
@@ -32,7 +32,7 @@ class BitrixTransportErrorTests(unittest.IsolatedAsyncioTestCase):
 
         http_client = httpx.AsyncClient(transport=httpx.MockTransport(handler))
         self.addAsyncCleanup(http_client.aclose)
-        with patch("app.bitrix_client._http_client", return_value=http_client):
+        with patch("apps.bot.backend.bitrix_client._http_client", return_value=http_client):
             with self.assertRaises(BitrixTransportError) as raised:
                 await BitrixClient(f"https://portal.test/rest/24/{secret}/").get_lead("42")
 

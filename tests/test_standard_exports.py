@@ -7,7 +7,7 @@ from unittest.mock import patch
 
 from openpyxl import load_workbook
 
-from app import standard_exports, store
+from apps.bot.backend import standard_exports, store
 
 
 class FakeClient:
@@ -65,8 +65,8 @@ class StandardExportsTests(unittest.IsolatedAsyncioTestCase):
             daily_stats_timezone="Europe/Moscow", track_deal_category_id="0",
             deal_refusal_reason_field="UF_REASON",
         )
-        self.settings_patch = patch("app.standard_exports.get_settings", return_value=self.settings)
-        self.store_patch = patch("app.store.get_settings", return_value=self.settings)
+        self.settings_patch = patch("apps.bot.backend.standard_exports.get_settings", return_value=self.settings)
+        self.store_patch = patch("apps.bot.backend.store.get_settings", return_value=self.settings)
         self.settings_patch.start(); self.store_patch.start()
         store.execute(
             """INSERT INTO crm_item_events(entity_type,entity_id,event_type,old_value,new_value,occurred_at)

@@ -5,7 +5,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
-from app import stats, store
+from apps.bot.backend import stats, store
 
 
 class StatsTests(unittest.IsolatedAsyncioTestCase):
@@ -21,8 +21,8 @@ class StatsTests(unittest.IsolatedAsyncioTestCase):
             director_user_id_set={10, 20},
         )
         self.patches = [
-            patch("app.store.get_settings", return_value=self.settings),
-            patch("app.stats.get_settings", return_value=self.settings),
+            patch("apps.bot.backend.store.get_settings", return_value=self.settings),
+            patch("apps.bot.backend.stats.get_settings", return_value=self.settings),
         ]
         for item in self.patches:
             item.start()
@@ -161,7 +161,7 @@ class StatsTests(unittest.IsolatedAsyncioTestCase):
     async def test_report_is_sent_once_per_director(self):
         send = AsyncMock(side_effect=[{"message_id": 1}, {"message_id": 2}])
         now = datetime(2026, 9, 21, 19, 1, tzinfo=ZoneInfo("Europe/Moscow"))
-        with patch("app.stats.send_telegram_message", new=send):
+        with patch("apps.bot.backend.stats.send_telegram_message", new=send):
             await stats.send_due_report(now)
             await stats.send_due_report(now)
         self.assertEqual(send.await_count, 2)

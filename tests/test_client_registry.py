@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, patch
 
 from openpyxl import load_workbook
 
-from app import client_registry
+from apps.bot.backend import client_registry
 
 
 class ClientRegistryTests(unittest.IsolatedAsyncioTestCase):
@@ -42,7 +42,7 @@ class ClientRegistryTests(unittest.IsolatedAsyncioTestCase):
             {"ID": "102", "NAME": "Анна", "LAST_NAME": "Петрова", "PHONE": []},
         ]
 
-        with patch("app.client_registry.get_settings", return_value=settings):
+        with patch("apps.bot.backend.client_registry.get_settings", return_value=settings):
             data = await client_registry.collect_clients(client=client)
 
         self.assertEqual([item["deal_id"] for item in data["items"]], ["12", "11"])

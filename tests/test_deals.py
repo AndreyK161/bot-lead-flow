@@ -4,8 +4,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from app import deals, store
-from app.bitrix_client import BitrixApiError
+from apps.bot.backend import deals, store
+from apps.bot.backend.bitrix_client import BitrixApiError
 
 
 class DealTrackingTests(unittest.IsolatedAsyncioTestCase):
@@ -22,9 +22,9 @@ class DealTrackingTests(unittest.IsolatedAsyncioTestCase):
         self.client.get_source_name.return_value='TikTok'
         self.client.get_user_name.return_value='Менеджер'
         self.send=AsyncMock(side_effect=[{'message_id':1},{'message_id':2}])
-        self.patches=[patch('app.store.get_settings',return_value=self.settings),patch('app.deals.get_settings',return_value=self.settings),
-                      patch('app.deals.BitrixClient',return_value=self.client),patch('app.deals.send_telegram_message',new=self.send),
-                      patch('app.deals.edit_message_text',new=AsyncMock())]
+        self.patches=[patch('apps.bot.backend.store.get_settings',return_value=self.settings),patch('apps.bot.backend.deals.get_settings',return_value=self.settings),
+                      patch('apps.bot.backend.deals.BitrixClient',return_value=self.client),patch('apps.bot.backend.deals.send_telegram_message',new=self.send),
+                      patch('apps.bot.backend.deals.edit_message_text',new=AsyncMock())]
         for item in self.patches:item.start()
         deals.lock=asyncio.Lock()
 
@@ -117,7 +117,7 @@ class DealTrackingTests(unittest.IsolatedAsyncioTestCase):
 
 class DealJunkApiTests(unittest.IsolatedAsyncioTestCase):
     def client(self,final='UC_K0Z3P6'):
-        from app.bitrix_client import BitrixClient
+        from apps.bot.backend.bitrix_client import BitrixClient
         client=BitrixClient(webhook_url='https://portal.test/rest/1/x/')
         client.get_deal=AsyncMock(side_effect=[{'ID':'1','CATEGORY_ID':'0','STAGE_ID':'NEW'},{'ID':'1','CATEGORY_ID':'0','STAGE_ID':final}])
         client._call=AsyncMock(return_value=[{'STATUS_ID':'UC_K0Z3P6','NAME':'Мусор'}])

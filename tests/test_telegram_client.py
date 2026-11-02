@@ -2,7 +2,7 @@ import unittest
 from html.parser import HTMLParser
 from unittest.mock import AsyncMock, patch
 
-from app.telegram_client import (
+from apps.bot.backend.telegram_client import (
     TELEGRAM_TEXT_LIMIT,
     edit_message_text,
     send_telegram_message,
@@ -55,7 +55,7 @@ class TelegramMessageSplittingTests(unittest.IsolatedAsyncioTestCase):
             {"result": {"message_id": 11}},
         ])
         keyboard = {"inline_keyboard": [[{"text": "OK", "callback_data": "ok"}]]}
-        with patch("app.telegram_client._call", new=call):
+        with patch("apps.bot.backend.telegram_client._call", new=call):
             result = await send_telegram_message("x" * 5000, chat_id=123, reply_markup=keyboard)
 
         self.assertEqual(result["message_id"], 11)
@@ -65,7 +65,7 @@ class TelegramMessageSplittingTests(unittest.IsolatedAsyncioTestCase):
     async def test_long_edit_sends_followups_and_moves_keyboard(self):
         call = AsyncMock(return_value={"result": {"message_id": 11}})
         keyboard = {"inline_keyboard": [[{"text": "OK", "callback_data": "ok"}]]}
-        with patch("app.telegram_client._call", new=call):
+        with patch("apps.bot.backend.telegram_client._call", new=call):
             await edit_message_text(123, 10, "x" * 5000, reply_markup=keyboard)
 
         self.assertEqual(call.await_args_list[0].args[0], "editMessageText")
@@ -75,7 +75,7 @@ class TelegramMessageSplittingTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_sets_native_web_app_menu_button_for_requested_chat(self):
         call = AsyncMock(return_value={"ok": True, "result": True})
-        with patch("app.telegram_client._call", new=call):
+        with patch("apps.bot.backend.telegram_client._call", new=call):
             await set_chat_menu_button(
                 "https://lead.prav-buro.ru/miniapp",
                 chat_id=1297686797,

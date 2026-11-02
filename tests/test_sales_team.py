@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from app.sales_team import assignable_sales_users
+from apps.bot.backend.sales_team import assignable_sales_users
 
 
 def test_excludes_anastasia_by_id_and_name():

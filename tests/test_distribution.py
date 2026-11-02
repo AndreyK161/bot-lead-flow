@@ -3,7 +3,7 @@ from datetime import date, datetime, timezone
 from itertools import product
 from zoneinfo import ZoneInfo
 
-from app.distribution import PERIODS, best_distributions, parse_manual_date, previous_days
+from apps.bot.backend.distribution import PERIODS, best_distributions, parse_manual_date, previous_days
 
 
 class DistributionTests(unittest.TestCase):

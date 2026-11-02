@@ -12,7 +12,7 @@ from psycopg import sql
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from app.store import _initialize_postgres
+from apps.bot.backend.store import _initialize_postgres
 
 TABLES = (
     "submissions",

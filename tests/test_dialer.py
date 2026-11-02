@@ -6,7 +6,7 @@ from datetime import date
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from app import dialer, store
+from apps.bot.backend import dialer, store
 
 
 class DialerTests(unittest.IsolatedAsyncioTestCase):
@@ -23,8 +23,8 @@ class DialerTests(unittest.IsolatedAsyncioTestCase):
             megafon_vats_auth_header="X-API-KEY",
             megafon_dialer_user_map={"110": {"user": "701", "group": "", "clid": "74950000000"}},
         )
-        self.store_patch = patch("app.store.get_settings", return_value=self.settings)
-        self.settings_patch = patch("app.dialer.get_settings", return_value=self.settings)
+        self.store_patch = patch("apps.bot.backend.store.get_settings", return_value=self.settings)
+        self.settings_patch = patch("apps.bot.backend.dialer.get_settings", return_value=self.settings)
         self.store_patch.start(); self.settings_patch.start()
 
     async def asyncTearDown(self):
@@ -40,7 +40,7 @@ class DialerTests(unittest.IsolatedAsyncioTestCase):
         }]
         client.get_lead_statuses.return_value = [{"STATUS_ID": "IN_PROCESS", "NAME": "В работе"}]
         client.get_contacts_full_by_ids.return_value = []
-        with patch("app.dialer.BitrixClient", return_value=client):
+        with patch("apps.bot.backend.dialer.BitrixClient", return_value=client):
             return await dialer.create_session(
                 telegram_id=telegram_id, bitrix_user_id="110", manager_name="Анна",
                 entity_type="lead", date_from=date(2026, 10, 29), date_to=date(2026, 10, 29),
@@ -65,7 +65,7 @@ class DialerTests(unittest.IsolatedAsyncioTestCase):
                 entity_type="lead", date_from=date(2026, 10, 29), date_to=date(2026, 10, 29),
                 category_id=None, stage_ids=[], auto_advance=True,
             )
-        with patch("app.dialer.BitrixClient", return_value=client):
+        with patch("apps.bot.backend.dialer.BitrixClient", return_value=client):
             results = await asyncio.gather(
                 asyncio.to_thread(lambda: asyncio.run(create())),
                 asyncio.to_thread(lambda: asyncio.run(create())),
@@ -108,7 +108,7 @@ class DialerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_start_and_success_callback_wait_for_manager_confirmation(self):
         payload = await self.create_queue()
-        with patch("app.dialer.make_call", AsyncMock(return_value="CALL-42")):
+        with patch("apps.bot.backend.dialer.make_call", AsyncMock(return_value="CALL-42")):
             started = await dialer.start_next(payload["session"]["id"], 100)
         self.assertEqual(started["current"]["status"], "calling")
         handled = await dialer.process_callback({
@@ -123,10 +123,10 @@ class DialerTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_missed_callback_is_idempotent_and_completes_queue(self):
         payload = await self.create_queue()
-        with patch("app.dialer.make_call", AsyncMock(return_value="CALL-42")):
+        with patch("apps.bot.backend.dialer.make_call", AsyncMock(return_value="CALL-42")):
             await dialer.start_next(payload["session"]["id"], 100)
         comment = AsyncMock()
-        with patch("app.dialer._comment", comment):
+        with patch("apps.bot.backend.dialer._comment", comment):
             await dialer.process_callback({
                 "cmd": "history", "callid": "CALL-42", "status": "missed", "duration": 0,
             })

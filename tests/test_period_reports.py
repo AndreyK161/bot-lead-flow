@@ -7,7 +7,7 @@ from unittest.mock import AsyncMock, patch
 
 from openpyxl import load_workbook
 
-from app import period_reports
+from apps.bot.backend import period_reports
 
 
 TEST_DIRECTOR_ID = 1297686797
@@ -24,7 +24,7 @@ class LivePeriodReportTests(unittest.IsolatedAsyncioTestCase):
             bitrix_webhook_url="https://example.bitrix24.ru/rest/1/token/",
             director_user_id_set={TEST_DIRECTOR_ID},
         )
-        self.settings_patch = patch("app.period_reports.get_settings", return_value=self.settings)
+        self.settings_patch = patch("apps.bot.backend.period_reports.get_settings", return_value=self.settings)
         self.settings_patch.start()
 
     async def asyncTearDown(self):

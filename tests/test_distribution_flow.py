@@ -4,14 +4,14 @@ from datetime import datetime, timezone
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from app import distribution_flow, store
+from apps.bot.backend import distribution_flow, store
 
 
 class DistributionFlowTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.settings = SimpleNamespace(database_path=self.tmp.name + '/db.sqlite', sales_department_id='5')
-        self.store_patch = patch('app.store.get_settings', return_value=self.settings)
+        self.store_patch = patch('apps.bot.backend.store.get_settings', return_value=self.settings)
         self.store_patch.start()
         self.managers = [
             {'bitrix_id': '1', 'name': 'Анна'},
@@ -25,8 +25,8 @@ class DistributionFlowTests(unittest.IsolatedAsyncioTestCase):
         self.tmp.cleanup()
 
     async def test_start_persists_session_and_renders_real_sales_managers(self):
-        with patch('app.distribution_flow._sales_managers', new=AsyncMock(return_value=self.managers)), \
-             patch('app.distribution_flow.send_telegram_message', new=AsyncMock()) as send:
+        with patch('apps.bot.backend.distribution_flow._sales_managers', new=AsyncMock(return_value=self.managers)), \
+             patch('apps.bot.backend.distribution_flow.send_telegram_message', new=AsyncMock()) as send:
             await distribution_flow.start(1297686797, 1297686797, self.settings)
         session = store.distribution_session(1297686797)
         self.assertEqual(session['step'], 'managers')
@@ -42,7 +42,7 @@ class DistributionFlowTests(unittest.IsolatedAsyncioTestCase):
             'id': 'cb', 'from': {'id': 1297686797}, 'data': 'dist:old:manager:0',
             'message': {'chat': {'id': 1297686797}, 'message_id': 10},
         }
-        with patch('app.distribution_flow.answer_callback_query', new=AsyncMock()) as answer:
+        with patch('apps.bot.backend.distribution_flow.answer_callback_query', new=AsyncMock()) as answer:
             self.assertTrue(await distribution_flow.handle_callback(callback, self.settings))
         self.assertTrue(answer.await_args.kwargs['show_alert'])
         self.assertEqual(store.distribution_session(1297686797)['payload']['selected'], [])
@@ -55,7 +55,7 @@ class DistributionFlowTests(unittest.IsolatedAsyncioTestCase):
             'id': 'cb', 'from': {'id': 1297686797}, 'data': 'dist:current:manager:3',
             'message': {'chat': {'id': 1297686797}, 'message_id': 10},
         }
-        with patch('app.distribution_flow.answer_callback_query', new=AsyncMock()) as answer:
+        with patch('apps.bot.backend.distribution_flow.answer_callback_query', new=AsyncMock()) as answer:
             await distribution_flow.handle_callback(callback, self.settings)
         self.assertIn('не более трёх', answer.await_args.kwargs['text'])
         self.assertEqual(store.distribution_session(1297686797)['payload']['selected'], [0, 1, 2])
@@ -86,7 +86,7 @@ class DistributionFlowTests(unittest.IsolatedAsyncioTestCase):
         self.settings.mode_switch_user_id = 1297686797
         store.set_distribution_reminder(1297686797, 1297686797, True)
         now = datetime(2026, 10, 21, 7, 2, tzinfo=timezone.utc)
-        with patch('app.distribution_flow.send_telegram_message', new=AsyncMock()) as send:
+        with patch('apps.bot.backend.distribution_flow.send_telegram_message', new=AsyncMock()) as send:
             self.assertEqual(await distribution_flow.send_due_reminders(self.settings, now=now), 1)
             self.assertEqual(await distribution_flow.send_due_reminders(self.settings, now=now), 0)
         send.assert_awaited_once()
@@ -100,8 +100,8 @@ class DistributionFlowTests(unittest.IsolatedAsyncioTestCase):
         manager_id = 7939114214
         store.set_distribution_reminder(manager_id, manager_id, True)
         now = datetime(2026, 10, 21, 7, 2, tzinfo=timezone.utc)
-        with patch('app.distribution_flow.planner_access.enabled_user_ids', return_value={manager_id}), \
-             patch('app.distribution_flow.send_telegram_message', new=AsyncMock()) as send:
+        with patch('apps.bot.backend.distribution_flow.planner_access.enabled_user_ids', return_value={manager_id}), \
+             patch('apps.bot.backend.distribution_flow.send_telegram_message', new=AsyncMock()) as send:
             self.assertEqual(await distribution_flow.send_due_reminders(self.settings, now=now), 1)
         self.assertEqual(send.await_args.kwargs['chat_id'], manager_id)
 

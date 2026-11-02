@@ -4,14 +4,14 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from app import journal, store
+from apps.bot.backend import journal, store
 
 
 class BitrixJournalTests(unittest.TestCase):
     def setUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.settings = SimpleNamespace(database_path=self.tmp.name + "/db.sqlite", database_url="")
-        self.patcher = patch("app.store.get_settings", return_value=self.settings)
+        self.patcher = patch("apps.bot.backend.store.get_settings", return_value=self.settings)
         self.patcher.start()
 
     def tearDown(self):

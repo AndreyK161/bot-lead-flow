@@ -3,8 +3,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from app import main, manual, store
-from app.bitrix_client import LEAD_PREFERRED_CALL_TIME_FIELD, BitrixApiError
+from apps.bot.backend import main, manual, store
+from apps.bot.backend.bitrix_client import LEAD_PREFERRED_CALL_TIME_FIELD, BitrixApiError
 
 
 def form_request(headers=None, **fields):
@@ -30,9 +30,9 @@ class WebhookTestCase(unittest.IsolatedAsyncioTestCase):
             manual_bot_token='',
         )
         self.patches = [
-            patch('app.main.get_settings', return_value=self.settings),
-            patch('app.store.get_settings', return_value=self.settings),
-            patch('app.manual.get_settings', return_value=self.settings),
+            patch('apps.bot.backend.main.get_settings', return_value=self.settings),
+            patch('apps.bot.backend.store.get_settings', return_value=self.settings),
+            patch('apps.bot.backend.manual.get_settings', return_value=self.settings),
         ]
         for p in self.patches:
             p.start()
@@ -43,7 +43,7 @@ class WebhookTestCase(unittest.IsolatedAsyncioTestCase):
         self.client.get_source_name.return_value = 'Сайт'
         self.client.get_user_name.return_value = 'Никита Продажников'
         self.client.get_department_users.return_value = [{'ID': '460', 'NAME': 'Никита', 'LAST_NAME': 'Продажников'}]
-        self.bitrix_patch = patch('app.main.BitrixClient', return_value=self.client)
+        self.bitrix_patch = patch('apps.bot.backend.main.BitrixClient', return_value=self.client)
         self.bitrix_patch.start()
 
         self.send_message = AsyncMock(return_value={'message_id': 42, 'chat': {'id': -100}})
@@ -51,10 +51,10 @@ class WebhookTestCase(unittest.IsolatedAsyncioTestCase):
         self.edit_text = AsyncMock()
         self.answer_cb = AsyncMock()
         self.tg_patches = [
-            patch('app.main.send_telegram_message', new=self.send_message),
-            patch('app.main.edit_message_reply_markup', new=self.edit_markup),
-            patch('app.main.edit_message_text', new=self.edit_text),
-            patch('app.main.answer_callback_query', new=self.answer_cb),
+            patch('apps.bot.backend.main.send_telegram_message', new=self.send_message),
+            patch('apps.bot.backend.main.edit_message_reply_markup', new=self.edit_markup),
+            patch('apps.bot.backend.main.edit_message_text', new=self.edit_text),
+            patch('apps.bot.backend.main.answer_callback_query', new=self.answer_cb),
         ]
         for p in self.tg_patches:
             p.start()
@@ -83,21 +83,21 @@ class BitrixWebhookTests(WebhookTestCase):
 
     async def test_routes_new_deal_event_to_deal_tracker(self):
         request = form_request(**{'auth[application_token]': 'apptoken', 'event': 'ONCRMDEALADD', 'data[FIELDS][ID]': '19406'})
-        with patch('app.main.deals.track', new=AsyncMock(return_value=True)) as track:
+        with patch('apps.bot.backend.main.deals.track', new=AsyncMock(return_value=True)) as track:
             result = await main.bitrix_webhook(request)
         self.assertEqual(result, {'status': 'ok'})
         track.assert_awaited_once_with('19406')
 
     async def test_routes_deal_update_to_statistics_without_new_notification(self):
         request = form_request(**{'auth[application_token]': 'apptoken', 'event': 'ONCRMDEALUPDATE', 'data[FIELDS][ID]': '19406'})
-        with patch('app.main.deals.observe_update', new=AsyncMock(return_value=True)) as observe:
+        with patch('apps.bot.backend.main.deals.observe_update', new=AsyncMock(return_value=True)) as observe:
             result = await main.bitrix_webhook(request)
         self.assertEqual(result, {'status': 'ok'})
         observe.assert_awaited_once_with('19406')
 
     async def test_lead_update_refreshes_statistics_without_notification(self):
         request = form_request(**{'auth[application_token]': 'apptoken', 'event': 'ONCRMLEADUPDATE', 'data[FIELDS][ID]': '20312'})
-        with patch('app.main.stats.observe', new=AsyncMock()) as observe:
+        with patch('apps.bot.backend.main.stats.observe', new=AsyncMock()) as observe:
             result = await main.bitrix_webhook(request)
         self.assertEqual(result, {'status': 'ok'})
         observe.assert_awaited_once_with('lead', self.client.get_lead.return_value, self.client)
@@ -268,7 +268,7 @@ class TelegramWebhookAuthTests(WebhookTestCase):
     async def test_phone_message_is_routed_to_manual_flow(self):
         message={'chat': {'id': 100, 'type': 'private'}, 'from': {'id': 100}, 'text': '+79990000000'}
         request=json_request(headers={'X-Telegram-Bot-Api-Secret-Token':'secret'},update_id=77,message=message)
-        with patch('app.main.manual.handle_main_message',new=AsyncMock(return_value=True)) as handle:
+        with patch('apps.bot.backend.main.manual.handle_main_message',new=AsyncMock(return_value=True)) as handle:
             result=await main.telegram_webhook(request)
         self.assertEqual(result,{'status':'ok'})
         handle.assert_awaited_once_with(message,77)
@@ -296,7 +296,7 @@ class TelegramWebhookAuthTests(WebhookTestCase):
             callback_query={'id': 'mode-cb', 'from': {'id': owner}, 'data': 'mode:manager',
                             'message': {'chat': {'id': owner}, 'message_id': 7, 'text': 'mode'}},
         )
-        with patch('app.main.set_chat_menu_button', new=AsyncMock()) as set_menu:
+        with patch('apps.bot.backend.main.set_chat_menu_button', new=AsyncMock()) as set_menu:
             await main.telegram_webhook(request)
         self.assertEqual(store.user_ui_mode(owner), 'manager')
         set_menu.assert_awaited_once_with(
@@ -329,7 +329,7 @@ class TelegramWebhookAuthTests(WebhookTestCase):
         request = json_request(
             headers={'X-Telegram-Bot-Api-Secret-Token': 'secret'}, update_id=79, message=message,
         )
-        with patch('app.main.period_reports.enqueue_period_report', return_value=True) as enqueue:
+        with patch('apps.bot.backend.main.period_reports.enqueue_period_report', return_value=True) as enqueue:
             await main.telegram_webhook(request)
         enqueue.assert_called_once()
         self.assertEqual(enqueue.call_args.kwargs['chat_id'], director_id)
@@ -391,7 +391,7 @@ class TelegramWebhookAuthTests(WebhookTestCase):
             },
         )
 
-        with patch('app.main.manual.handle_main_message', new=AsyncMock(return_value=False)):
+        with patch('apps.bot.backend.main.manual.handle_main_message', new=AsyncMock(return_value=False)):
             await main.telegram_webhook(request)
 
         self.send_message.assert_not_awaited()
@@ -478,7 +478,7 @@ class TelegramWebhookAuthTests(WebhookTestCase):
                 'from': {'id': manager_id}, 'text': '/distribution',
             },
         )
-        with patch('app.main.distribution_flow.start', new=AsyncMock()) as start:
+        with patch('apps.bot.backend.main.distribution_flow.start', new=AsyncMock()) as start:
             await main.telegram_webhook(request)
         start.assert_awaited_once_with(manager_id, manager_id, self.settings)
 
@@ -498,7 +498,7 @@ class TelegramWebhookAuthTests(WebhookTestCase):
                 'from': {'id': owner_id}, 'text': f'/planner_enable {manager_id}',
             },
         )
-        with patch('app.main.set_chat_menu_button', new=AsyncMock()) as set_menu:
+        with patch('apps.bot.backend.main.set_chat_menu_button', new=AsyncMock()) as set_menu:
             await main.telegram_webhook(request)
         self.assertTrue(store.planner_access(manager_id)['login_enabled'])
         set_menu.assert_awaited_once_with(
@@ -527,7 +527,7 @@ class TelegramWebhookAuthTests(WebhookTestCase):
     async def test_manual_callback_is_acknowledged_before_processing(self):
         callback={'id':'cb-manual','from':{'id':100},'data':'ms:abc:tg','message':{'chat':{'id':100},'message_id':1}}
         request=json_request(headers={'X-Telegram-Bot-Api-Secret-Token':'secret'},update_id=78,callback_query=callback)
-        with patch('app.main.manual.handle_main_callback',new=AsyncMock(return_value=True)) as handle:
+        with patch('apps.bot.backend.main.manual.handle_main_callback',new=AsyncMock(return_value=True)) as handle:
             await main.telegram_webhook(request)
         self.answer_cb.assert_awaited_once_with('cb-manual')
         handle.assert_awaited_once_with(callback,78)

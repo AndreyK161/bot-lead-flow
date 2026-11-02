@@ -16,7 +16,7 @@
 ## Поток лида из Bitrix
 
 1. Bitrix присылает событие на `/bitrix/webhook`.
-2. `app.main` проверяет токен и через `app.journal` делает идемпотентную запись события.
+2. `apps.bot.backend.main` проверяет токен и через `apps.bot.backend.journal` делает идемпотентную запись события.
 3. `app.bitrix_client` запрашивает полный лид, источник и ответственного.
 4. `app.store` сохраняет лид и нормализованные телефоны; по телефону есть резервное сопоставление, если Bitrix потерял `LEAD_ID`.
 5. `app.formatter` строит HTML-сообщение, `app.telegram_client` отправляет его получателям.
@@ -29,15 +29,15 @@
 
 ## Данные и модули
 
-- `app/store.py` — общий слой SQLite/PostgreSQL; таблицы submissions, deliveries, manager_links, deal_notifications, seen_leads, crm_items, crm_item_events, bitrix_events, daily_report_deliveries.
-- `app/journal.py` — durable журнал входящих Bitrix-событий, дедупликация по payload hash и повторные попытки.
-- `app/stats.py` / `app/reports.py` — атрибуция изменений по менеджерам, дневные сводки и рассылка руководителям.
-- `app/period_reports.py` — live-сбор отчёта из Bitrix и выгрузка XLSX.
-- `app/outcomes.py` — связывание лида/сделки/договора и синхронизация исходов.
-- `app/reconcile.py` — периодическая сверка локального состояния с CRM.
-- `app/manual.py` — пошаговый ручной сценарий создания лида с источником, менеджером и комментарием.
-- `app/miniapp.py` + `app/static/miniapp.html` — Telegram Mini App, подпись init data, отчёты и фоновые задачи.
-- `app/config.py` — Pydantic-настройки из `.env`; production предполагает PostgreSQL, локальные тесты — SQLite.
+- `apps/bot/backend/store.py` — общий слой SQLite/PostgreSQL; таблицы submissions, deliveries, manager_links, deal_notifications, seen_leads, crm_items, crm_item_events, bitrix_events, daily_report_deliveries.
+- `apps/bot/backend/journal.py` — durable журнал входящих Bitrix-событий, дедупликация по payload hash и повторные попытки.
+- `apps/bot/backend/stats.py` / `apps/bot/backend/reports.py` — атрибуция изменений по менеджерам, дневные сводки и рассылка руководителям.
+- `apps/bot/backend/period_reports.py` — live-сбор отчёта из Bitrix и выгрузка XLSX.
+- `apps/bot/backend/outcomes.py` — связывание лида/сделки/договора и синхронизация исходов.
+- `apps/bot/backend/reconcile.py` — периодическая сверка локального состояния с CRM.
+- `apps/bot/backend/manual.py` — пошаговый ручной сценарий создания лида с источником, менеджером и комментарием.
+- `apps/bot/backend/miniapp.py` + `apps/bot/backend/static/miniapp.html` — Telegram Mini App, подпись init data, отчёты и фоновые задачи.
+- `apps/bot/backend/config.py` — Pydantic-настройки из `.env`; production предполагает PostgreSQL, локальные тесты — SQLite.
 
 ## Роли и доступ
 
@@ -52,9 +52,9 @@
 
 ## Важные точки для дальнейшей работы
 
-- Для изменений в обработке событий сначала смотреть `app/main.py`, `app/journal.py`, `app/bitrix_client.py`, `app/store.py` и соответствующие `tests/test_webhook.py`/`tests/test_journal.py`.
-- Для сделок — `app/deals.py`, `app/stats.py`, `app/reports.py` и `tests/test_deals.py`.
-- Для ручного ввода и ролей — `app/manual.py`, `app/miniapp.py`, `tests/test_manual.py`, `tests/test_miniapp.py`.
+- Для изменений в обработке событий сначала смотреть `apps/bot/backend/main.py`, `apps/bot/backend/journal.py`, `apps/bot/backend/bitrix_client.py`, `apps/bot/backend/store.py` и соответствующие `tests/test_webhook.py`/`tests/test_journal.py`.
+- Для сделок — `apps/bot/backend/deals.py`, `apps/bot/backend/stats.py`, `apps/bot/backend/reports.py` и `tests/test_deals.py`.
+- Для ручного ввода и ролей — `apps/bot/backend/manual.py`, `apps/bot/backend/miniapp.py`, `tests/test_manual.py`, `tests/test_miniapp.py`.
 - Состояние распределено между Bitrix и локальной БД; при изменениях важно сохранять идемпотентность, курсоры, retry и совместимость SQLite/PostgreSQL.
 
 ## Первая выгрузка Excel

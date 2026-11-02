@@ -3,7 +3,7 @@ from datetime import date
 from unittest.mock import AsyncMock
 from zoneinfo import ZoneInfo
 
-from app.bitrix_client import BitrixClient
+from apps.bot.backend.bitrix_client import BitrixClient
 
 
 class DistributionBitrixTests(unittest.IsolatedAsyncioTestCase):

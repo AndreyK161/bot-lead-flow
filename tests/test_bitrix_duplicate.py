@@ -3,8 +3,8 @@ import unittest
 from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
-from app import store
-from app.bitrix_client import BitrixClient
+from apps.bot.backend import store
+from apps.bot.backend.bitrix_client import BitrixClient
 
 
 class DuplicateLeadTests(unittest.IsolatedAsyncioTestCase):
@@ -88,7 +88,7 @@ class PlusSevenVsEightIntegrationTests(unittest.IsolatedAsyncioTestCase):
     async def asyncSetUp(self):
         self.tmp = tempfile.TemporaryDirectory()
         self.settings = SimpleNamespace(database_path=self.tmp.name + '/db.sqlite')
-        self.patcher = patch('app.store.get_settings', return_value=self.settings)
+        self.patcher = patch('apps.bot.backend.store.get_settings', return_value=self.settings)
         self.patcher.start()
 
     async def asyncTearDown(self):
