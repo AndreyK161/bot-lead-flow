@@ -91,9 +91,9 @@ def _mini_app_destination(settings, user_id: int) -> tuple[str, str]:
         user_id == switch_user_id and store.user_ui_mode(user_id) == "manager"
     ) or (identity is not None and identity["role"] == "manager")
     if manager_mode:
-        return getattr(settings, "manager_app_url", "https://tg.prav-buro.ru/manager/"), "План дня"
+        return getattr(settings, "manager_app_url", "https://flow.prav-buro.ru/manager/"), "План дня"
     if identity is not None and identity["role"] == "supervisor":
-        return getattr(settings, "manager_app_url", "https://tg.prav-buro.ru/manager/"), "Планы"
+        return getattr(settings, "manager_app_url", "https://flow.prav-buro.ru/manager/"), "Планы"
     return settings.mini_app_url, "Отчёты"
 
 

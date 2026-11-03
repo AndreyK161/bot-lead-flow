@@ -115,8 +115,8 @@ class Settings(BaseSettings):
     contract_source_url_field: str = "UF_CRM_1775217002"
     deal_refusal_reason_field: str = "UF_CRM_REFUSAL_REASON_OP"
     deal_contract_date_field: str = "UF_CRM_CONTRACT_DATE_OP"
-    mini_app_url: str = "https://lead.prav-buro.ru/miniapp"
-    manager_app_url: str = "https://tg.prav-buro.ru/workday/"
+    mini_app_url: str = "https://flow.prav-buro.ru/miniapp"
+    manager_app_url: str = "https://flow.prav-buro.ru/manager/"
     manager_planner_database_path: str = "data/manager_planner.sqlite3"
     # Explicit opt-in; the core DATABASE_URL does not select Planner storage.
     manager_planner_database_url: str = ""
