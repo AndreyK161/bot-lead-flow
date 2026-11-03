@@ -87,10 +87,10 @@ app.include_router(call_tracking.router)
 def _mini_app_destination(settings, user_id: int) -> tuple[str, str]:
     switch_user_id = getattr(settings, "mode_switch_user_id", 1297686797)
     identity = planner_access.authorized_identity(user_id)
-    manager_mode = (
-        user_id == switch_user_id and store.user_ui_mode(user_id) == "manager"
-    ) or (identity is not None and identity["role"] == "manager")
-    if manager_mode:
+    if user_id == switch_user_id:
+        label = "План дня" if store.user_ui_mode(user_id) == "manager" else "Планы"
+        return getattr(settings, "manager_app_url", "https://flow.prav-buro.ru/manager/"), label
+    if identity is not None and identity["role"] == "manager":
         return getattr(settings, "manager_app_url", "https://flow.prav-buro.ru/manager/"), "План дня"
     if identity is not None and identity["role"] == "supervisor":
         return getattr(settings, "manager_app_url", "https://flow.prav-buro.ru/manager/"), "Планы"
@@ -100,18 +100,22 @@ def _mini_app_destination(settings, user_id: int) -> tuple[str, str]:
 def _mini_app_keyboard(settings, user_id: int) -> dict:
     url, label = _mini_app_destination(settings, user_id)
     identity = planner_access.authorized_identity(user_id)
+    open_labels = {
+        "План дня": "🗓 Открыть план дня",
+        "Планы": "🗓 Планы сотрудников",
+        "Отчёты": "📊 Открыть отчёты",
+    }
     open_button = {
-        "text": "🗓 Открыть план дня" if label == "План дня" else "📊 Открыть отчёты",
+        "text": open_labels[label],
         "web_app": {"url": url},
     }
     if user_id == getattr(settings, "mode_switch_user_id", 1297686797):
         current = store.user_ui_mode(user_id)
-        return {
-            "inline_keyboard": [
-                [open_button],
-                _mode_keyboard(current)["inline_keyboard"][0],
-            ],
-        }
+        rows = [[open_button]]
+        if current == "supervisor":
+            rows.append([{"text": "📊 Отчёты Lead Flow", "web_app": {"url": settings.mini_app_url}}])
+        rows.append(_mode_keyboard(current)["inline_keyboard"][0])
+        return {"inline_keyboard": rows}
     if identity is not None and identity["role"] == "supervisor":
         return {
             "inline_keyboard": [
@@ -381,7 +385,7 @@ async def _handle_message(message: dict, settings, update_id: int) -> None:
     if command == "/mode" and user_id == getattr(settings, "mode_switch_user_id", 1297686797):
         current = store.user_ui_mode(user_id)
         await send_telegram_message(
-            "Выберите, какой Mini App открывать: руководительские отчёты или личный план менеджера.",
+            "Выберите режим Planner: планы сотрудников руководителя или личный план менеджера.",
             chat_id=user_id,
             reply_markup=_mode_keyboard(current),
         )

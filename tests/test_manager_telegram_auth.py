@@ -80,6 +80,8 @@ class ManagerTelegramAuthTests(unittest.TestCase):
             try:
                 with patch("apps.planner.backend.api.get_settings", return_value=settings), patch(
                     "apps.planner.backend.api.access_registry.authorized_identity", return_value=identity,
+                ), patch(
+                    "apps.planner.backend.api.access_registry.owner_ui_mode", return_value="manager",
                 ):
                     with TestClient(api.create_app()) as client:
                         response = client.post(
@@ -90,6 +92,42 @@ class ManagerTelegramAuthTests(unittest.TestCase):
                         session = response.json()["access_token"]
                         me = client.get("/api/me", headers={"Authorization": f"tgweb {session}"})
                         self.assertEqual(me.status_code, 200)
+                        self.assertEqual(me.json()["user"]["telegram_id"], 1297686797)
+            finally:
+                api.store = previous_store
+
+    def test_owner_supervisor_mode_gets_supervisor_scope(self):
+        with tempfile.TemporaryDirectory() as directory:
+            previous_store = api.store
+            api.store = Store(Path(directory) / "planner.sqlite3")
+            api.store.initialize()
+            settings = SimpleNamespace(
+                telegram_bot_token=BOT_TOKEN,
+                telegram_bot_username="lead_notification_prav_buro_bot",
+                telegram_login_max_age_seconds=600,
+                telegram_web_session_seconds=43200,
+                leadflow_web_auth_url="",
+                leadflow_web_auth_timeout_seconds=1,
+            )
+            identity = {
+                "telegram_id": 1297686797, "role": "owner",
+                "bitrix_user_id": None, "active": True,
+            }
+            try:
+                with patch("apps.planner.backend.api.get_settings", return_value=settings), patch(
+                    "apps.planner.backend.api.access_registry.authorized_identity", return_value=identity,
+                ), patch(
+                    "apps.planner.backend.api.access_registry.owner_ui_mode", return_value="supervisor",
+                ):
+                    with TestClient(api.create_app()) as client:
+                        response = client.post(
+                            "/api/auth/telegram",
+                            json=signed_login(auth_date=int(time.time())),
+                        )
+                        session = response.json()["access_token"]
+                        me = client.get("/api/me", headers={"Authorization": f"tgweb {session}"})
+                        self.assertEqual(me.status_code, 200)
+                        self.assertEqual(me.json()["user"]["role"], "supervisor")
                         self.assertEqual(me.json()["user"]["telegram_id"], 1297686797)
             finally:
                 api.store = previous_store

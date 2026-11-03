@@ -50,6 +50,11 @@ def authorized_identity(telegram_id: int) -> dict | None:
     return identity
 
 
+def owner_ui_mode(telegram_id: int) -> str:
+    """Return the server-side mode selected by the privileged owner account."""
+    return store.user_ui_mode(telegram_id)
+
+
 def enabled_user_ids(*, role: str | None = None) -> set[int]:
     """Return only explicitly opened accounts, optionally scoped by role."""
     return {

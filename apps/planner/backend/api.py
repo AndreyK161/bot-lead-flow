@@ -115,6 +115,13 @@ def create_app() -> FastAPI:
         if identity is None:
             raise HTTPException(403, "Доступ к Planner пока не открыт.")
         user = store.actor(telegram_id)
+        if identity["role"] == "owner":
+            # The owner deliberately shares one Telegram account between the
+            # manager and supervisor views. The selected mode is persisted by
+            # the bot and is authoritative; never accept a client role flag.
+            if access_registry.owner_ui_mode(telegram_id) == "supervisor":
+                user = {**user, "role": "supervisor"}
+            return user
         if identity["role"] != "owner" and user["role"] != identity["role"]:
             raise HTTPException(403, "Роль Planner не совпадает с перенесённой ролью.")
         if identity["role"] == "manager" and str(user.get("bitrix_id") or "") != str(identity["bitrix_user_id"] or ""):

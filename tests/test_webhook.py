@@ -314,8 +314,26 @@ class TelegramWebhookAuthTests(WebhookTestCase):
         self.settings.mini_app_url = 'https://lead.prav-buro.ru/miniapp'
         keyboard = main._mini_app_keyboard(self.settings, owner)
         self.assertEqual(
-            [button['callback_data'] for button in keyboard['inline_keyboard'][1]],
+            [button['callback_data'] for button in keyboard['inline_keyboard'][-1]],
             ['mode:supervisor', 'mode:manager'],
+        )
+
+    async def test_owner_supervisor_mode_opens_planner_and_keeps_reports(self):
+        owner = 1297686797
+        self.settings.mode_switch_user_id = owner
+        self.settings.manager_app_url = 'https://flow.prav-buro.ru/manager/'
+        self.settings.mini_app_url = 'https://flow.prav-buro.ru/miniapp'
+        store.set_user_ui_mode(owner, 'supervisor')
+
+        self.assertEqual(
+            main._mini_app_destination(self.settings, owner),
+            ('https://flow.prav-buro.ru/manager/', 'Планы'),
+        )
+        keyboard = main._mini_app_keyboard(self.settings, owner)
+        self.assertEqual(keyboard['inline_keyboard'][0][0]['text'], '🗓 Планы сотрудников')
+        self.assertEqual(
+            keyboard['inline_keyboard'][1][0]['web_app']['url'],
+            'https://flow.prav-buro.ru/miniapp',
         )
 
     async def test_period_command_is_sent_only_to_requesting_director(self):
@@ -354,8 +372,13 @@ class TelegramWebhookAuthTests(WebhookTestCase):
 
         self.send_message.assert_awaited_once()
         self.assertEqual(self.send_message.call_args.kwargs['chat_id'], director_id)
-        button = self.send_message.call_args.kwargs['reply_markup']['inline_keyboard'][0][0]
-        self.assertEqual(button['web_app']['url'], 'https://lead.prav-buro.ru/miniapp')
+        buttons = [
+            button
+            for row in self.send_message.call_args.kwargs['reply_markup']['inline_keyboard']
+            for button in row
+            if 'web_app' in button
+        ]
+        self.assertIn('https://lead.prav-buro.ru/miniapp', [button['web_app']['url'] for button in buttons])
 
     async def test_app_command_is_available_to_admin_without_director_role(self):
         admin_id = 1297686797
@@ -375,8 +398,13 @@ class TelegramWebhookAuthTests(WebhookTestCase):
 
         self.send_message.assert_awaited_once()
         self.assertEqual(self.send_message.call_args.kwargs['chat_id'], admin_id)
-        button = self.send_message.call_args.kwargs['reply_markup']['inline_keyboard'][0][0]
-        self.assertEqual(button['web_app']['url'], 'https://lead.prav-buro.ru/miniapp')
+        buttons = [
+            button
+            for row in self.send_message.call_args.kwargs['reply_markup']['inline_keyboard']
+            for button in row
+            if 'web_app' in button
+        ]
+        self.assertIn('https://lead.prav-buro.ru/miniapp', [button['web_app']['url'] for button in buttons])
 
     async def test_app_command_is_not_available_to_regular_manager(self):
         manager_id = 1297686797
