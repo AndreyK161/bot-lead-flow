@@ -409,6 +409,29 @@ Vite записывает HTML и assets в `apps/planner/static/`. Dockerfile �
 Регрессии cookie callback, анонимного доступа, повреждения/истечения сессии и
 отключения сотрудника проверяет `tests/test_manager_telegram_auth.py`.
 
+## Мониторинг production
+
+`/health` бота проверяет PostgreSQL, состояние всех фоновых asyncio-задач и
+свежесть успешной Bitrix-сверки. `/health` Planner проверяет обе базы и задачу
+доставки распределений. При проблеме endpoint возвращает HTTP 503 с безопасным
+описанием проверки без секретов и персональных данных.
+
+Внешний watchdog `scripts/monitor_lead_flow.py` запускается systemd-таймером
+каждые две минуты и независимо проверяет контейнеры, внутренние и публичные
+health endpoints, Telegram webhook, свободное место и свежесть ежедневного
+бэкапа. Уведомление отправляется только при изменении набора ошибок; после
+восстановления приходит отдельное сообщение. Получатель берётся из первого ID
+в `SUPER_ADMIN_USERS`; при необходимости его можно переопределить только на
+сервере через `/etc/default/leadflow-monitor`:
+
+```text
+LEADFLOW_MONITOR_CHAT_ID=1297686797
+```
+
+Unit-файлы находятся в `deploy/leadflow-monitor.service` и
+`deploy/leadflow-monitor.timer`. Состояние дедупликации хранится в
+`/var/lib/leadflow-monitor/state.json`.
+
 ## База данных в production
 
 Эта секция ниже описывает базу **бота**. У Planner по умолчанию остаётся отдельная

@@ -1,0 +1,17 @@
+[Unit]
+Description=Lead Flow production watchdog
+After=docker.service network-online.target
+Wants=network-online.target
+
+[Service]
+Type=oneshot
+EnvironmentFile=-/etc/default/leadflow-monitor
+ExecStart=/usr/bin/python3 /opt/pravburo/bot-lead-flow/scripts/monitor_lead_flow.py
+StateDirectory=leadflow-monitor
+User=root
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ProtectSystem=full
+ReadWritePaths=/var/lib/leadflow-monitor
+

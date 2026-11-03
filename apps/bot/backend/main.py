@@ -6,9 +6,11 @@ import asyncio
 import hashlib
 import logging
 from contextlib import asynccontextmanager, suppress
+from datetime import datetime, timezone
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request, status
+from fastapi.responses import JSONResponse
 
 from apps.bot.backend import call_tracking, deals, distribution_flow, journal, manual, miniapp, outcomes, period_reports, planner_access, reconcile, reports, stats, store
 from apps.bot.backend.bitrix_client import (
@@ -55,21 +57,22 @@ async def lifespan(app):
             await set_chat_menu_button(url, chat_id=account_id, text=label)
         except Exception:
             logger.exception("Failed to configure Mini App menu button for user_id=%s", account_id)
-    tasks = [
-        asyncio.create_task(deals.polling_loop()),
-        asyncio.create_task(manual.recovery_loop()),
-        asyncio.create_task(reports.daily_report_loop()),
-        asyncio.create_task(reconcile.reconciliation_loop()),
-        asyncio.create_task(outcomes.daily_sync_loop()),
-        asyncio.create_task(_bitrix_event_recovery_loop()),
-        asyncio.create_task(distribution_flow.reminder_loop(settings)),
-    ]
+    tasks = {
+        "deal_polling": asyncio.create_task(deals.polling_loop(), name="deal_polling"),
+        "manual_recovery": asyncio.create_task(manual.recovery_loop(), name="manual_recovery"),
+        "daily_reports": asyncio.create_task(reports.daily_report_loop(), name="daily_reports"),
+        "bitrix_reconciliation": asyncio.create_task(reconcile.reconciliation_loop(), name="bitrix_reconciliation"),
+        "outcome_sync": asyncio.create_task(outcomes.daily_sync_loop(), name="outcome_sync"),
+        "bitrix_event_recovery": asyncio.create_task(_bitrix_event_recovery_loop(), name="bitrix_event_recovery"),
+        "distribution_reminders": asyncio.create_task(distribution_flow.reminder_loop(settings), name="distribution_reminders"),
+    }
+    app.state.background_tasks = tasks
     try:
         yield
     finally:
-        for task in tasks:
+        for task in tasks.values():
             task.cancel()
-        for task in tasks:
+        for task in tasks.values():
             with suppress(asyncio.CancelledError):
                 await task
         await close_http_client()
@@ -740,5 +743,40 @@ async def telegram_webhook(request: Request) -> dict[str, str]:
 
 
 @app.get("/health")
-async def health() -> dict[str, str]:
-    return {"status": "ok"}
+async def health():
+    checks: dict[str, object] = {}
+    healthy = True
+    try:
+        store.rows("SELECT 1 AS ok")
+        checks["database"] = "ok"
+    except Exception:
+        checks["database"] = "unavailable"
+        healthy = False
+
+    tasks = getattr(app.state, "background_tasks", {})
+    stopped = sorted(name for name, task in tasks.items() if task.done())
+    checks["background_tasks"] = {"status": "ok" if not stopped else "stopped", "stopped": stopped}
+    healthy = healthy and not stopped
+
+    try:
+        rows = store.rows(
+            "SELECT key,value FROM metadata WHERE key IN (?,?)",
+            (reconcile.LEAD_CURSOR, reconcile.DEAL_CURSOR),
+        )
+        cursors = []
+        now = datetime.now(timezone.utc)
+        for row in rows:
+            value = datetime.fromisoformat(str(row["value"]).replace("Z", "+00:00"))
+            value = value if value.tzinfo else value.replace(tzinfo=timezone.utc)
+            cursors.append(max(0, int((now - value).total_seconds())))
+        max_age = max(900, int(get_settings().reconcile_interval_seconds) * 3)
+        age = max(cursors) if cursors else None
+        fresh = age is None or age <= max_age
+        checks["bitrix_reconciliation"] = {"status": "ok" if fresh else "stale", "age_seconds": age, "max_age_seconds": max_age}
+        healthy = healthy and fresh
+    except Exception:
+        checks["bitrix_reconciliation"] = {"status": "invalid"}
+        healthy = False
+
+    payload = {"status": "ok" if healthy else "unavailable", "checks": checks}
+    return payload if healthy else JSONResponse(payload, status_code=503)
