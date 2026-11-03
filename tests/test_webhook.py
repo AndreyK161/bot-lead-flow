@@ -318,7 +318,7 @@ class TelegramWebhookAuthTests(WebhookTestCase):
             ['mode:supervisor', 'mode:manager'],
         )
 
-    async def test_owner_supervisor_mode_opens_planner_and_keeps_reports(self):
+    async def test_owner_supervisor_mode_opens_reports_and_keeps_planner(self):
         owner = 1297686797
         self.settings.mode_switch_user_id = owner
         self.settings.manager_app_url = 'https://flow.prav-buro.ru/manager/'
@@ -327,13 +327,13 @@ class TelegramWebhookAuthTests(WebhookTestCase):
 
         self.assertEqual(
             main._mini_app_destination(self.settings, owner),
-            ('https://flow.prav-buro.ru/manager/', 'Планы'),
+            ('https://flow.prav-buro.ru/miniapp', 'Отчёты'),
         )
         keyboard = main._mini_app_keyboard(self.settings, owner)
-        self.assertEqual(keyboard['inline_keyboard'][0][0]['text'], '🗓 Планы сотрудников')
+        self.assertEqual(keyboard['inline_keyboard'][0][0]['text'], '📊 Открыть отчёты')
         self.assertEqual(
             keyboard['inline_keyboard'][1][0]['web_app']['url'],
-            'https://flow.prav-buro.ru/miniapp',
+            'https://flow.prav-buro.ru/manager/',
         )
 
     async def test_period_command_is_sent_only_to_requesting_director(self):
