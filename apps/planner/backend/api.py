@@ -31,6 +31,30 @@ _web_identity_cache: dict[str, tuple[float, dict]] = {}
 WEB_IDENTITY_CACHE_SECONDS = 15
 TELEGRAM_SESSION_COOKIE = "planner_telegram_session"
 
+CACHE_MAX_ENTRIES = 512
+
+
+def _prune_cache(cache: dict, ttl: float) -> None:
+    now = time.monotonic()
+    for key, (created, _) in list(cache.items()):
+        if now - created >= ttl:
+            del cache[key]
+
+
+def _cache_get(cache: dict, key, ttl: float):
+    _prune_cache(cache, ttl)
+    entry = cache.get(key)
+    return entry[1] if entry is not None else None
+
+
+def _cache_put(cache: dict, key, value: dict, ttl: float) -> None:
+    _prune_cache(cache, ttl)
+    cache.pop(key, None)
+    while len(cache) >= CACHE_MAX_ENTRIES:
+        del cache[next(iter(cache))]
+    cache[key] = (time.monotonic(), value)
+
+
 
 static_path = Path(__file__).resolve().parent.parent / "static"
 # Configuration is deliberately not loaded at import time: the main test suite
@@ -185,8 +209,7 @@ def create_app() -> FastAPI:
         if not token:
             raise HTTPException(401, "Токен входа отсутствует.")
         cache_key = hashlib.sha256(token.encode()).hexdigest()
-        cached = _web_identity_cache.get(cache_key)
-        web_user = cached[1] if cached and time.monotonic() - cached[0] < WEB_IDENTITY_CACHE_SECONDS else None
+        web_user = _cache_get(_web_identity_cache, cache_key, WEB_IDENTITY_CACHE_SECONDS)
         if web_user is None:
             try:
                 async with httpx.AsyncClient(timeout=settings.leadflow_web_auth_timeout_seconds) as client:
@@ -206,7 +229,10 @@ def create_app() -> FastAPI:
                 raise HTTPException(502, "Сервис авторизации вернул некорректный ответ.") from None
             if not isinstance(web_user, dict) or not web_user.get("is_active"):
                 raise HTTPException(403, "Учётная запись отключена.")
-            _web_identity_cache[cache_key] = (time.monotonic(), web_user)
+            _cache_put(_web_identity_cache, cache_key, web_user, WEB_IDENTITY_CACHE_SECONDS)
+        web_user_id = web_user.get("id")
+        if type(web_user_id) is not int or not 0 < web_user_id < 2**63:
+            raise HTTPException(502, "Сервис авторизации вернул некорректный ID аккаунта.")
         role = str(web_user.get("role") or "")
         with store.connection() as connection:
             if role == "manager":
@@ -216,16 +242,19 @@ def create_app() -> FastAPI:
                     (bitrix_id,),
                 ).fetchone() if bitrix_id else None
             elif role in {"admin", "supervisor"}:
+                bindings = getattr(settings, "planner_web_supervisor_bindings", {})
+                telegram_id = bindings.get(str(web_user_id))
                 row = connection.execute(
-                    "SELECT * FROM employees WHERE role='supervisor' AND active=1 ORDER BY id LIMIT 1"
-                ).fetchone()
+                    "SELECT * FROM employees WHERE role='supervisor' AND active=1 AND telegram_id=?",
+                    (telegram_id,),
+                ).fetchone() if telegram_id else None
             else:
                 row = None
         if row is None:
             raise HTTPException(403, "Учётная запись Lead Flow не привязана к сотруднику Planner.")
         user = dict(row)
         user["name"] = str(web_user.get("full_name") or user["name"])
-        user["web_user_id"] = int(web_user.get("id") or 0)
+        user["web_user_id"] = web_user_id
         user["auth_transport"] = "web"
         return user
 
@@ -311,9 +340,9 @@ def create_app() -> FastAPI:
                 "message": "Сотрудник не привязан к Bitrix24.",
             }
         key = (int(employee["bitrix_id"]), selected_day)
-        cached = _crm_cache.get(key)
-        if cached and time.monotonic() - cached[0] < CRM_CACHE_SECONDS:
-            return cached[1]
+        cached = _cache_get(_crm_cache, key, CRM_CACHE_SECONDS)
+        if cached is not None:
+            return cached
         try:
             result = await PlannerCRM().summary(key[0], key[1])
         except Exception:
@@ -322,7 +351,7 @@ def create_app() -> FastAPI:
                 "available": False, "day": selected_day,
                 "message": "Bitrix24 временно недоступен. План продолжает работать.",
             }
-        _crm_cache[key] = (time.monotonic(), result)
+        _cache_put(_crm_cache, key, result, CRM_CACHE_SECONDS)
         return result
 
     @app.get("/api/crm/performance")
@@ -345,9 +374,9 @@ def create_app() -> FastAPI:
                 "message": "Сотрудник не привязан к Bitrix24.",
             }
         key = (int(employee["bitrix_id"]), period["start"], period["end"])
-        cached = _performance_cache.get(key)
-        if cached and time.monotonic() - cached[0] < CRM_CACHE_SECONDS:
-            return cached[1]
+        cached = _cache_get(_performance_cache, key, CRM_CACHE_SECONDS)
+        if cached is not None:
+            return cached
         try:
             result = await PlannerCRM().performance(*key)
         except Exception:
@@ -359,7 +388,7 @@ def create_app() -> FastAPI:
                 "message": "Bitrix24 временно недоступен. Повторите загрузку позже.",
             }
         result["employee"] = {"id": employee["id"], "name": employee["name"]}
-        _performance_cache[key] = (time.monotonic(), result)
+        _cache_put(_performance_cache, key, result, CRM_CACHE_SECONDS)
         return result
 
     @app.get("/api/dialer/filters")

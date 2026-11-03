@@ -204,6 +204,12 @@ def _schema(*, postgres: bool) -> str:
         );
         CREATE INDEX IF NOT EXISTS idx_dialer_events_call
             ON dialer_call_events(call_id,occurred_at);
+        CREATE TABLE IF NOT EXISTS dialer_pending_callbacks (
+            event_key TEXT PRIMARY KEY, call_id TEXT NOT NULL,
+            payload TEXT NOT NULL, received_at BIGINT NOT NULL
+        );
+        CREATE INDEX IF NOT EXISTS idx_dialer_pending_call
+            ON dialer_pending_callbacks(call_id,received_at);
     '''
 
 

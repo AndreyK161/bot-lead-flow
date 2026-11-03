@@ -2,6 +2,7 @@ import ast
 import json
 from functools import lru_cache
 
+from pydantic import Field, StrictInt, field_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -124,6 +125,21 @@ class Settings(BaseSettings):
     # Telegram Mini App authorization remains the default transport.
     leadflow_web_auth_url: str = ""
     leadflow_web_auth_timeout_seconds: float = 5.0
+    # Verified Lead Flow account ID -> existing Planner Telegram identity.
+    planner_web_supervisor_bindings: dict[str, StrictInt] = Field(default_factory=dict)
+
+    @field_validator("planner_web_supervisor_bindings")
+    @classmethod
+    def validate_web_supervisor_bindings(cls, bindings):
+        for account, telegram_id in bindings.items():
+            if not account.isascii() or not account.isdecimal() or str(int(account)) != account or not 0 < int(account) < 2**63:
+                raise ValueError("Lead Flow account IDs must be canonical positive integers")
+            if not 0 < telegram_id < 2**63:
+                raise ValueError("Planner Telegram IDs must be positive 64-bit integers")
+        if len(set(bindings.values())) != len(bindings):
+            raise ValueError("Each web supervisor must have a separate Planner identity")
+        return bindings
+
     telegram_bot_username: str = "lead_notification_prav_buro_bot"
     planner_public_url: str = "https://flow.prav-buro.ru"
     telegram_login_max_age_seconds: int = 600

@@ -139,6 +139,49 @@ class DialerTests(unittest.IsolatedAsyncioTestCase):
         self.assertEqual(len(store.rows("SELECT * FROM dialer_call_events")), 1)
         comment.assert_awaited_once()
 
+    async def test_old_callbacks_cannot_replace_a_retried_call_or_advance_queue(self):
+        events = (
+            {'cmd': 'history', 'status': 'missed'},
+            {'cmd': 'history', 'status': 'Success'},
+            {'cmd': 'event', 'type': 'ACCEPTED'},
+        )
+        for index, event in enumerate(events):
+            with self.subTest(event=event):
+                user_id = 500 + index
+                payload = await self.create_queue(user_id)
+                session_id = payload['session']['id']
+                item_id = payload['current']['id']
+                store.execute("INSERT INTO dialer_queue_items(session_id,position,entity_type,entity_id,phone) VALUES(?,2,'lead','99','79990000001')", (session_id,))
+                old_call, new_call = f'OLD-{index}', f'NEW-{index}'
+                with patch('apps.bot.backend.dialer.make_call', new=AsyncMock(side_effect=[old_call, new_call])) as calls, \
+                     patch('apps.bot.backend.dialer._comment', new=AsyncMock()):
+                    await dialer.start_next(session_id, user_id)
+                    await dialer.resolve(session_id, item_id, 'retry', user_id)
+                    self.assertEqual(calls.await_count, 2)
+                before = dialer.session_payload(session_id, user_id)
+                with patch('apps.bot.backend.dialer.make_call', new=AsyncMock()) as call, \
+                     patch('apps.bot.backend.dialer._comment', new=AsyncMock()) as comment:
+                    self.assertTrue(await dialer.process_callback({**event, 'callid': old_call}))
+                call.assert_not_awaited()
+                comment.assert_not_awaited()
+                self.assertEqual(dialer.session_payload(session_id, user_id), before)
+                attempts = store.rows('SELECT call_id,status FROM dialer_call_attempts WHERE item_id=? ORDER BY id', (item_id,))
+                self.assertEqual(attempts, [{'call_id': old_call, 'status': 'completed'}, {'call_id': new_call, 'status': 'calling'}])
+
+    async def test_changed_history_delivery_does_not_override_manual_confirmation(self):
+        payload = await self.create_queue()
+        session_id, item_id = payload['session']['id'], payload['current']['id']
+        with patch('apps.bot.backend.dialer.make_call', new=AsyncMock(return_value='CONFIRMED')):
+            await dialer.start_next(session_id, 100)
+        with patch('apps.bot.backend.dialer._comment', new=AsyncMock()):
+            await dialer.process_callback({'cmd': 'history', 'callid': 'CONFIRMED', 'status': 'Success', 'duration': 90})
+            await dialer.resolve(session_id, item_id, 'answered', 100)
+        before = dialer.session_payload(session_id, 100)
+        with patch('apps.bot.backend.dialer._comment', new=AsyncMock()) as comment:
+            await dialer.process_callback({'cmd': 'history', 'callid': 'CONFIRMED', 'status': 'Success', 'duration': 91})
+        comment.assert_not_awaited()
+        self.assertEqual(dialer.session_payload(session_id, 100), before)
+
     async def test_late_callback_does_not_restart_cancelled_queue(self):
         for index, status in enumerate(('missed', 'Success')):
             with self.subTest(status=status):
@@ -182,6 +225,149 @@ class DialerTests(unittest.IsolatedAsyncioTestCase):
                 await dialer.resolve(session_id, payload['current']['id'], 'failed', 100)
         self.assertEqual(error.exception.status, 409)
         self.assertEqual(dialer.session_payload(session_id, 100)['session']['status'], 'cancelled')
+
+    async def test_stale_tab_cannot_finish_queue_with_another_call_running(self):
+        payload = await self.create_queue()
+        session_id, item_id = payload['session']['id'], payload['current']['id']
+        store.execute("INSERT INTO dialer_queue_items(session_id,position,entity_type,entity_id,phone) VALUES(?,2,'lead','99','79990000001')", (session_id,))
+        with patch('apps.bot.backend.dialer.make_call', new=AsyncMock(return_value='FIRST')):
+            await dialer.start_next(session_id, 100)
+        await dialer.process_callback({'cmd': 'history', 'callid': 'FIRST', 'status': 'Success'})
+        with patch('apps.bot.backend.dialer._comment', new=AsyncMock()), \
+             patch('apps.bot.backend.dialer.make_call', new=AsyncMock(return_value='SECOND')):
+            await dialer.resolve(session_id, item_id, 'failed', 100)
+        before = dialer.session_payload(session_id, 100)
+        with patch('apps.bot.backend.dialer._comment', new=AsyncMock()) as comment, \
+             patch('apps.bot.backend.dialer.make_call', new=AsyncMock()) as call:
+            with self.assertRaises(dialer.DialerError) as error:
+                await dialer.resolve(session_id, item_id, 'answered', 100)
+        self.assertEqual(error.exception.status, 409)
+        self.assertEqual(dialer.session_payload(session_id, 100), before)
+        comment.assert_not_awaited()
+        call.assert_not_awaited()
+
+    async def test_result_changed_between_read_and_write_is_rejected(self):
+        payload = await self.create_queue()
+        session_id, item_id = payload['session']['id'], payload['current']['id']
+        with patch('apps.bot.backend.dialer.make_call', new=AsyncMock(return_value='FIRST')):
+            await dialer.start_next(session_id, 100)
+        await dialer.process_callback({'cmd': 'history', 'callid': 'FIRST', 'status': 'Success'})
+        original = store.rows
+        def changed_after_read(sql, params=()):
+            rows = original(sql, params)
+            if 'WHERE id=? AND session_id=?' in sql:
+                store.execute("UPDATE dialer_queue_items SET status='no_answer',last_result='failed' WHERE id=?", (item_id,))
+            return rows
+        with patch('apps.bot.backend.dialer.store.rows', side_effect=changed_after_read), \
+             patch('apps.bot.backend.dialer._comment', new=AsyncMock()) as comment:
+            with self.assertRaises(dialer.DialerError) as error:
+                await dialer.resolve(session_id, item_id, 'answered', 100)
+        self.assertEqual(error.exception.status, 409)
+        self.assertEqual(original('SELECT status FROM dialer_queue_items WHERE id=?', (item_id,))[0]['status'], 'no_answer')
+        comment.assert_not_awaited()
+
+    async def test_concurrent_manual_results_only_one_can_be_saved(self):
+        payload = await self.create_queue()
+        session_id, item_id = payload['session']['id'], payload['current']['id']
+        store.execute('UPDATE dialer_sessions SET auto_advance=0 WHERE id=?', (session_id,))
+        with patch('apps.bot.backend.dialer.make_call', new=AsyncMock(return_value='CONFIRM')):
+            await dialer.start_next(session_id, 100)
+        await dialer.process_callback({'cmd': 'history', 'callid': 'CONFIRM', 'status': 'Success'})
+        barrier = threading.Barrier(2)
+        original = store.rows
+        def simultaneous_reads(sql, params=()):
+            rows = original(sql, params)
+            if 'WHERE id=? AND session_id=?' in sql:
+                barrier.wait(5)
+            return rows
+        async def save(result):
+            try:
+                await dialer.resolve(session_id, item_id, result, 100)
+                return 'saved'
+            except dialer.DialerError as error:
+                return error.status
+        with patch('apps.bot.backend.dialer.store.rows', side_effect=simultaneous_reads), \
+             patch('apps.bot.backend.dialer._comment', new=AsyncMock()) as comment:
+            results = await asyncio.gather(
+                asyncio.to_thread(lambda: asyncio.run(save('answered'))),
+                asyncio.to_thread(lambda: asyncio.run(save('failed'))),
+            )
+        self.assertCountEqual(results, ['saved', 409])
+        self.assertEqual(comment.await_count, 1)
+
+    async def test_early_history_is_durable_deduplicated_and_replayed(self):
+        payload = await self.create_queue()
+        async def provider(*args):
+            event = {'cmd': 'history', 'callid': 'EARLY', 'status': 'Success', 'duration': 17, 'auth': 'do-not-store'}
+            self.assertTrue(await dialer.process_callback(event))
+            self.assertTrue(await dialer.process_callback(event))
+            pending = store.rows('SELECT payload FROM dialer_pending_callbacks')
+            self.assertEqual(len(pending), 1)
+            self.assertNotIn('do-not-store', pending[0]['payload'])
+            return 'EARLY'
+        with patch('apps.bot.backend.dialer.make_call', side_effect=provider):
+            await dialer.start_next(payload['session']['id'], 100)
+        # A fresh recovery pass uses only persisted rows, not in-memory state.
+        await dialer.replay_pending_callbacks()
+        current = dialer.current_session(100)
+        self.assertEqual(current['current']['status'], 'awaiting_confirmation')
+        self.assertEqual(current['session']['status'], 'paused')
+        self.assertEqual(store.rows('SELECT duration_seconds FROM dialer_call_attempts')[0]['duration_seconds'], 17)
+        self.assertEqual(store.rows('SELECT * FROM dialer_pending_callbacks'), [])
+        self.assertEqual(len(store.rows('SELECT * FROM dialer_call_events')), 1)
+
+    async def test_early_accepted_event_is_replayed(self):
+        payload = await self.create_queue()
+        async def provider(*args):
+            self.assertTrue(await dialer.process_callback({'cmd': 'event', 'type': 'ACCEPTED', 'callid': 'EARLY-CONNECT'}))
+            return 'EARLY-CONNECT'
+        with patch('apps.bot.backend.dialer.make_call', side_effect=provider):
+            await dialer.start_next(payload['session']['id'], 100)
+        await dialer.replay_pending_callbacks()
+        self.assertEqual(dialer.current_session(100)['current']['status'], 'connected')
+
+    async def test_early_missed_event_advances_only_once(self):
+        payload = await self.create_queue()
+        sid = payload['session']['id']
+        store.execute("INSERT INTO dialer_queue_items(session_id,position,entity_type,entity_id,phone) VALUES(?,2,'lead','99','79990000001')", (sid,))
+        async def provider(*args):
+            await dialer.process_callback({'cmd': 'history', 'status': 'missed', 'callid': 'EARLY-MISS'})
+            return 'EARLY-MISS'
+        with patch('apps.bot.backend.dialer.make_call', side_effect=provider):
+            await dialer.start_next(sid, 100)
+        with patch('apps.bot.backend.dialer.make_call', new=AsyncMock(return_value='NEXT')) as call, \
+             patch('apps.bot.backend.dialer._comment', new=AsyncMock()):
+            await dialer.replay_pending_callbacks()
+            await dialer.replay_pending_callbacks()
+        call.assert_awaited_once()
+        self.assertEqual(dialer.current_session(100)['current']['last_call_id'], 'NEXT')
+
+    async def test_failed_recovery_keeps_pending_event_for_retry(self):
+        payload = await self.create_queue()
+        async def provider(*args):
+            await dialer.process_callback({'cmd': 'history', 'status': 'Success', 'callid': 'RECOVER'})
+            return 'RECOVER'
+        with patch('apps.bot.backend.dialer.make_call', side_effect=provider):
+            await dialer.start_next(payload['session']['id'], 100)
+        with patch('apps.bot.backend.dialer._apply_callback', new=AsyncMock(side_effect=RuntimeError('temporary'))), \
+             self.assertLogs('apps.bot.backend.dialer', level='ERROR'):
+            await dialer.replay_pending_callbacks()
+        self.assertEqual(len(store.rows('SELECT * FROM dialer_pending_callbacks')), 1)
+        await dialer.replay_pending_callbacks()
+        self.assertEqual(dialer.current_session(100)['current']['status'], 'awaiting_confirmation')
+
+    async def test_unrelated_callbacks_are_ignored_or_expire(self):
+        self.assertFalse(await dialer.process_callback({'cmd': 'history', 'callid': 'UNRELATED'}))
+        payload = await self.create_queue()
+        async def provider(*args):
+            await dialer.process_callback({'cmd': 'history', 'callid': 'UNRELATED'})
+            return 'ACTUAL'
+        with patch('apps.bot.backend.dialer.make_call', side_effect=provider):
+            await dialer.start_next(payload['session']['id'], 100)
+        store.execute('UPDATE dialer_pending_callbacks SET received_at=0')
+        await dialer.replay_pending_callbacks()
+        self.assertEqual(store.rows('SELECT * FROM dialer_pending_callbacks'), [])
+        self.assertEqual(dialer.current_session(100)['current']['status'], 'calling')
 
     async def test_session_cannot_be_read_by_another_manager(self):
         payload = await self.create_queue()

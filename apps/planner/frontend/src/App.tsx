@@ -34,6 +34,8 @@ type Modal = { type: 'task' | 'goal' | 'move'; task?: Task } | { type: 'employee
 
 export default function App({ client = api, demo = false }: { client?: Client; demo?: boolean }) {
   const [me, setMe] = useState<Me>();
+  const [serverToday, setServerToday] = useState('');
+  const today = serverToday || me?.today || '';
   const [section, setSection] = useState('home');
   const [day, setDay] = useState('');
   const [employeeId, setEmployeeId] = useState<number>();
@@ -89,17 +91,53 @@ export default function App({ client = api, demo = false }: { client?: Client; d
   const currentView = useRef(view);
   currentView.current = view;
   const latestRefresh = useRef<(scope?: string) => Promise<void>>(async () => {});
+  const calendar = useRef({ today, day, section, modal, busy });
+  calendar.current = { today, day, section, modal, busy };
   const supervisor = me?.user.role === 'supervisor';
 
   useEffect(() => {
     let alive = true;
     client<Me>('/me').then(value => {
       if (!alive) return;
-      setMe(value); setDay(value.today); setProfileStart(value.today); setProfileEnd(value.today); setDialerFrom(value.today); setDialerTo(value.today);
+      setMe(value); setServerToday(value.today); setDay(value.today); setProfileStart(value.today); setProfileEnd(value.today); setDialerFrom(value.today); setDialerTo(value.today);
       if (value.user.role === 'manager') setEmployeeId(value.user.id);
     }).catch(e => { if (alive) { setError(e.message); setLoading(false); } });
     return () => { alive = false; };
   }, [client]);
+
+  useEffect(() => {
+    if (!me || modal || busy) return;
+    let alive = true;
+    let pending = false;
+    const updateToday = async () => {
+      if (document.hidden || pending) return;
+      pending = true;
+      try {
+        const value = await client<Me>('/me');
+        if (!alive || value.user.id !== me.user.id) return;
+        const current = calendar.current;
+        if (current.modal || current.busy || value.today === current.today) return;
+        // Follow the new day only on today's home screen. Historical plans
+        // and manually selected periods keep their dates.
+        if (current.section === 'home' && current.day === current.today) {
+          setDay(value.today);
+        }
+        setServerToday(value.today);
+      } catch {
+        // Keep the last server date and retry on the next tick or focus.
+      } finally { pending = false; }
+    };
+    const timer = setInterval(() => void updateToday(), 30000);
+    const resume = () => void updateToday();
+    window.addEventListener('focus', resume);
+    document.addEventListener('visibilitychange', resume);
+    return () => {
+      alive = false;
+      clearInterval(timer);
+      window.removeEventListener('focus', resume);
+      document.removeEventListener('visibilitychange', resume);
+    };
+  }, [client, me, modal, busy]);
 
   const refresh = useCallback(async (scope = 'all') => {
     if (!me || view !== currentView.current) return;
@@ -259,9 +297,9 @@ export default function App({ client = api, demo = false }: { client?: Client; d
   function navigate(destination: string) {
     if (destination === 'home' && me) {
       const homeEmployeeId = supervisor ? undefined : me.user.id;
-      if (day !== me.today || employeeId !== homeEmployeeId) {
+      if (day !== today || employeeId !== homeEmployeeId) {
         setEmployeeId(homeEmployeeId);
-        setDay(me.today);
+        setDay(today);
         setPlan(undefined);
         setPlans([]);
         setLoading(true);
@@ -289,9 +327,9 @@ export default function App({ client = api, demo = false }: { client?: Client; d
   const rubles = (value: number) => new Intl.NumberFormat('ru-RU', { style: 'currency', currency: 'RUB', maximumFractionDigits: 0 }).format(value);
   const renderCrm = () => crm && <section className="card crm-summary"><div className="section-heading"><h3>Обработка лидов и звонки</h3><span className="badge">Только чтение</span></div>{!crm.available ? <p className="notice">{crm.message}</p> : <div className="crm-grid"><div><span>Обработано лидов</span><strong>{crm.leads?.processed || 0}</strong><small>{crm.leads && Object.entries(crm.leads.stages).length ? Object.entries(crm.leads.stages).map(([stage, count]) => `${stage}: ${count}`).join(' · ') : 'Первый выход из стадии «Не обработан»'}</small></div><div><span>Звонков за день</span><strong>{crm.calls?.total || 0}</strong><small>Исходящих: {crm.calls?.outbound || 0} · дозвоны: {crm.calls?.answered || 0} · от 3 минут: {crm.calls?.long_calls || 0}</small>{crm.calls && !crm.calls.configured && <small>Нет привязки номера МегаФона</small>}</div><div><span>Общая длительность</span><strong>{minutes(crm.calls?.duration_seconds || 0)}</strong><small>Сумма состоявшихся исходящих звонков</small></div>{(crm.pipelines || []).map(p => <div key={p.category_id}><span>{p.category_id === 0 ? 'Сделки · Продажи' : `Сделки · Категория ${p.category_id}`}</span><strong>{p.total}</strong><small>Сумма: {rubles(p.amount)}</small></div>)}</div>}</section>;
   const setProfilePreset = (preset: 'today' | 'week' | 'month') => {
-    // me.today is a Moscow calendar date. Do calendar arithmetic independently
+    // today is a Moscow calendar date. Do calendar arithmetic independently
     // of the browser timezone (including DST), without shifting that date.
-    const end = new Date(`${me.today}T00:00:00Z`);
+    const end = new Date(`${today}T00:00:00Z`);
     const start = new Date(end);
     if (preset === 'week') start.setUTCDate(start.getUTCDate() - 6);
     if (preset === 'month') start.setUTCDate(1);
@@ -355,7 +393,7 @@ export default function App({ client = api, demo = false }: { client?: Client; d
     {p.initial_snapshot && <details><summary>Первоначальный утверждённый план</summary>{p.initial_snapshot.tasks.map(t => <p key={t.id}>{t.title} · {t.planned_minutes} мин{t.target != null ? ` · цель ${t.target}` : ''}</p>)}</details>}
   </section>;
 
-  const todayPlans = plans.filter(p => p.day === me.today);
+  const todayPlans = plans.filter(p => p.day === today);
   const dashboardPlans = supervisor ? todayPlans : plan ? [plan] : [];
   const dashboardTotal = dashboardPlans.reduce((sum, item) => sum + item.summary.total, 0);
   const dashboardDone = dashboardPlans.reduce((sum, item) => sum + item.summary.done, 0);
@@ -370,18 +408,18 @@ export default function App({ client = api, demo = false }: { client?: Client; d
       <article className="stat card"><div className="stat-top"><span>Плановое время</span><span className="icon-tile orange"><Icon name="plan"/></span></div><strong className="stat-value">{dashboardMinutes} <small>мин</small></strong><small>на выбранный рабочий день</small></article>
       <article className="stat card"><div className="stat-top"><span>Фактическое время</span><span className="icon-tile violet"><Icon name="history"/></span></div><strong className="stat-value">{Math.floor(dashboardSeconds / 3600)}:{String(Math.floor(dashboardSeconds % 3600 / 60)).padStart(2, '0')}</strong><small>по серверному учёту задач</small></article>
     </div>
-    {supervisor ? <section className="card team-overview"><div className="section-heading compact"><div><h2>Команда сегодня</h2><p className="muted">Реальные планы отдела на {dateLabel(me.today)}</p></div><button className="text-button" onClick={() => setSection('people')}>Все сотрудники →</button></div>
+    {supervisor ? <section className="card team-overview"><div className="section-heading compact"><div><h2>Команда сегодня</h2><p className="muted">Реальные планы отдела на {dateLabel(today)}</p></div><button className="text-button" onClick={() => setSection('people')}>Все сотрудники →</button></div>
       <div className="employee-grid">{todayPlans.map(item => <article className="employee-card" key={item.id}><div className="employee-top"><span className="avatar">{item.employee_name[0]}</span><div><h3>{item.employee_name}</h3><small>{item.summary.done} из {item.summary.total} задач</small></div><span className={`badge ${item.status}`}>{statusName[item.status]}</span></div><div className="employee-numbers"><div><strong>{item.summary.done} / {item.summary.total}</strong><small>задач завершено</small></div><div><strong>{Math.floor(item.summary.actual_seconds / 60)} мин</strong><small>фактическое время</small></div></div><progress max={item.summary.total || 1} value={item.summary.done}/><button className="text-button" onClick={() => selectPlan(item)}>Открыть план →</button></article>)}</div>
       {!todayPlans.length && <div className="empty small"><p>На сегодня планы ещё не созданы.</p></div>}
     </section> : <div className="dashboard-grid"><section className="card current-card"><div className="section-heading compact"><h2>Текущая задача</h2>{activeTask ? <span className="live-label"><i/>В работе</span> : <span className="badge">Нет активной</span>}</div>{activeTask ? <><p className="eyebrow">ИЗ ПЛАНА НА СЕГОДНЯ</p><h3>{activeTask.title}</h3><p className="muted">{activeTask.description || kindName[activeTask.kind]}</p><div className="current-main"><div className="timer">{clock(elapsed(activeTask))}<small>фактическое время</small></div>{activeTask.kind === 'quantitative' && <div className="current-target"><strong>{activeTask.actual_value}<span> / {activeTask.target}</span></strong><small>факт / цель</small></div>}</div><div className="current-actions"><button className="button" disabled={busy} onClick={() => act(`/tasks/${activeTask.id}/timer`, 'POST', { action: activeTask.timer_started ? 'pause' : 'start' }, activeTask.timer_started ? 'Таймер на паузе' : 'Таймер запущен')}><Icon name={activeTask.timer_started ? 'pause' : 'play'}/>{activeTask.timer_started ? 'Пауза' : 'Начать'}</button><button className="button secondary" onClick={() => setSection('tasks')}>К задаче →</button></div></> : <div className="empty small"><p>{plan ? 'Запустите задачу из плана, когда приступите к работе.' : 'Создайте план на сегодня, чтобы начать рабочий день.'}</p><button className="text-button" onClick={() => setSection('plan')}>Открыть план →</button></div>}</section>
-      <section className="card plan-card"><div className="section-heading compact"><h2>План рабочего дня</h2>{plan && <span className={`badge ${plan.status}`}>{statusName[plan.status]}</span>}</div><p className="muted">{plan ? `${plan.employee_name} · ${dateLabel(plan.day)}` : dateLabel(me.today)}</p><div className="plan-number">{dashboardPercent}<span>%</span><small>задач завершено</small></div><progress max={100} value={dashboardPercent}/><div className="plan-breakdown"><span><i className="legend green"/>Завершено <b>{dashboardDone}</b></span><span><i className="legend blue"/>Осталось <b>{Math.max(0, dashboardTotal - dashboardDone)}</b></span></div><div className="card-foot">План: {dashboardMinutes} мин <span>Факт: {minutes(dashboardSeconds)}</span></div></section></div>}
+      <section className="card plan-card"><div className="section-heading compact"><h2>План рабочего дня</h2>{plan && <span className={`badge ${plan.status}`}>{statusName[plan.status]}</span>}</div><p className="muted">{plan ? `${plan.employee_name} · ${dateLabel(plan.day)}` : dateLabel(today)}</p><div className="plan-number">{dashboardPercent}<span>%</span><small>задач завершено</small></div><progress max={100} value={dashboardPercent}/><div className="plan-breakdown"><span><i className="legend green"/>Завершено <b>{dashboardDone}</b></span><span><i className="legend blue"/>Осталось <b>{Math.max(0, dashboardTotal - dashboardDone)}</b></span></div><div className="card-foot">План: {dashboardMinutes} мин <span>Факт: {minutes(dashboardSeconds)}</span></div></section></div>}
     <section className="metrics-prompt"><span className="icon-tile blue"><Icon name="results"/></span><div><h3>{supervisor ? 'Все детали доступны в рабочих разделах' : 'Следующий шаг всегда перед глазами'}</h3><p>{supervisor ? 'Откройте сотрудника, планы или согласования.' : 'План, задачи, результаты и история используют реальные данные Lead Flow.'}</p></div><button className="text-button" onClick={() => setSection(supervisor ? 'people' : 'plan')}>Перейти →</button></section>
   </>;
 
   return <div className="shell">
     {import.meta.env.DEV && demo && <div className="demo-banner">ДЕМОНСТРАЦИЯ · Пример интерфейса, данные вымышлены · <a href="/preview.html?role=manager">Менеджер</a> / <a href="/preview.html?role=supervisor">Руководитель</a></div>}
     <div className="workspace"><aside className="sidebar"><button className="brand" onClick={() => navigate('home')}><span className="brand-mark">П</span><span><b>План дня</b><small>РАБОЧЕЕ ПРОСТРАНСТВО</small></span></button><p className="nav-caption">{supervisor ? 'УПРАВЛЕНИЕ ОТДЕЛОМ' : 'ЛИЧНЫЙ КАБИНЕТ'}</p><nav aria-label="Разделы">{tabs.map(([key, title]) => <button key={key} className={section === key ? 'active' : ''} onClick={() => navigate(key)}><Icon name={key === 'reports' ? 'results' : key === 'profile' ? 'people' : key}/><span>{title}</span>{key === 'requests' && pending > 0 && <em>{pending}</em>}</button>)}</nav><div className="sidebar-bottom"><span className="connection-dot"/>Lead Flow подключён<small>{me.crm.connected ? 'Bitrix24 и телефония доступны' : me.crm.message}</small></div><button className="profile" onClick={() => !supervisor && setSection('profile')}><div className="avatar">{me.user.name[0]}</div><div><b>{me.user.name}</b><span>{supervisor ? 'Руководитель' : 'Менеджер · открыть профиль'}</span></div></button></aside>
-    <div className="main-shell"><header className="topbar"><span>Рабочее пространство <span className="crumb">/ {tabs.find(t => t[0] === section)?.[1]}</span></span><div><span className="top-date">{dateLabel(me.today)}</span>{!isTelegramSession() && <button className="quiet web-logout" onClick={webLogout}>Выйти</button>}<span className="avatar small">{me.user.name[0]}</span></div></header><main className="page-content">
+    <div className="main-shell"><header className="topbar"><span>Рабочее пространство <span className="crumb">/ {tabs.find(t => t[0] === section)?.[1]}</span></span><div><span className="top-date">{dateLabel(today)}</span>{!isTelegramSession() && <button className="quiet web-logout" onClick={webLogout}>Выйти</button>}<span className="avatar small">{me.user.name[0]}</span></div></header><main className="page-content">
       <div className="page-title"><div><p className="eyebrow">{supervisor ? 'КОМАНДА И РЕЗУЛЬТАТ' : 'РАБОЧЕЕ ПРОСТРАНСТВО'}</p><h1>{tabs.find(t => t[0] === section)?.[1]}</h1></div><button className="quiet" disabled={busy || loading || profileLoading || dialerLoading} onClick={() => section === 'profile' ? void loadPerformance() : section === 'calls' ? void loadDialer() : refresh().catch(e => setError(e.message))}>Обновить</button></div>
       {error && <div className="error" role="alert">{error}<button className="icon-button" aria-label="Закрыть ошибку" onClick={() => setError('')}><Icon name="close"/></button></div>}
       {Object.entries(loadErrors).map(([key, message]) => <div className="error" role="alert" key={key}><span>{({ employees: 'Сотрудники', plans: 'Планы', requests: 'Согласования', distributions: 'Уведомления', history: 'История', crm: 'Bitrix24 и звонки' } as Record<string, string>)[key]}: {message}</span><button className="secondary" onClick={() => void refresh(key)}>Повторить загрузку</button></div>)}
@@ -389,10 +427,10 @@ export default function App({ client = api, demo = false }: { client?: Client; d
 
       {section === 'home' ? (loading ? <div className="empty"><div className="spinner"/><p>Загружаем планы…</p></div> : loadErrors.plans ? <p className="notice">Планы не удалось загрузить. Повторите загрузку выше.</p> : renderDashboard()) : section === 'profile' && !supervisor ? renderProfile() : section === 'calls' ? renderDialer() : section === 'people' && supervisor ? <>
         <section className="hero"><p className="eyebrow">ВМЕСТЕ К ЦЕЛИ</p><h2>У каждого — ясный план.<br/>У вас — общая картина.</h2><p>{employeesLoaded ? `${employees.filter(e => e.active).length} сотрудника в команде` : loadErrors.employees ? 'Сотрудники не загружены' : 'Загрузка сотрудников'}</p><button className="light" onClick={() => setModal({ type: 'employee' })}><Icon name="plus"/>Добавить сотрудника</button></section>
-        <div className="section-heading"><h2>Команда</h2><span className="muted">{dateLabel(me.today)}</span></div>
-        <div className="employee-grid">{employees.map(e => <section className="card employee" key={e.id}><div className="row"><div className="avatar">{e.name[0]}</div><div><h3>{e.name}</h3><span className="muted">{!e.active ? 'Доступ выключен' : e.telegram_id ? 'Менеджер' : 'Ожидает подключения Telegram'}</span></div></div><div className="actions"><button className="secondary" onClick={() => { setEmployeeId(e.id); setDay(me.today); setSection('plan'); }}>Открыть план <Icon name="arrow"/></button><button className="quiet" onClick={() => setModal({ type: 'employee', employee: e })}>Изменить</button></div></section>)}</div>
+        <div className="section-heading"><h2>Команда</h2><span className="muted">{dateLabel(today)}</span></div>
+        <div className="employee-grid">{employees.map(e => <section className="card employee" key={e.id}><div className="row"><div className="avatar">{e.name[0]}</div><div><h3>{e.name}</h3><span className="muted">{!e.active ? 'Доступ выключен' : e.telegram_id ? 'Менеджер' : 'Ожидает подключения Telegram'}</span></div></div><div className="actions"><button className="secondary" onClick={() => { setEmployeeId(e.id); setDay(today); setSection('plan'); }}>Открыть план <Icon name="arrow"/></button><button className="quiet" onClick={() => setModal({ type: 'employee', employee: e })}>Изменить</button></div></section>)}</div>
       </> : section === 'requests' ? loadErrors.requests ? <p className="notice">Согласования не загружены. Повторите загрузку выше.</p> : <Requests requests={requests} supervisor={!!supervisor} busy={busy} act={act}/> : <>
-        <div className="toolbar">{supervisor && <label>Сотрудник<select aria-label="Сотрудник" value={employeeId || ''} onChange={e => setEmployeeId(e.target.value ? Number(e.target.value) : undefined)}><option value="">Все менеджеры</option>{employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}</select></label>}<label>Дата · Москва<input aria-label="Дата плана" type="date" value={day} onChange={e => { if (e.target.value) setDay(e.target.value); }}/></label>{day !== me.today && <button className="quiet" onClick={() => setDay(me.today)}>Сегодня</button>}</div>
+        <div className="toolbar">{supervisor && <label>Сотрудник<select aria-label="Сотрудник" value={employeeId || ''} onChange={e => setEmployeeId(e.target.value ? Number(e.target.value) : undefined)}><option value="">Все менеджеры</option>{employees.map(e => <option key={e.id} value={e.id}>{e.name}</option>)}</select></label>}<label>Дата · Москва<input aria-label="Дата плана" type="date" value={day} onChange={e => { if (e.target.value) setDay(e.target.value); }}/></label>{day !== today && <button className="quiet" onClick={() => setDay(today)}>Сегодня</button>}</div>
         {distributions.filter(d => d.status !== 'imported').map(d => <aside className="notice" key={`${d.id}-${d.employee_id || 'system'}`}><strong>Требует рассмотрения</strong><p>{d.employee_name}{d.day && ` · ${dateLabel(d.day)}`}</p><p>{d.reason === 'plan_already_confirmed_or_closed' ? 'План уже подтверждён или день закрыт. Новое распределение сохранено отдельно, план не изменён.' : d.reason === 'import_retry' ? 'Запись не импортирована. Система повторяет попытки.' : 'Нужно проверить активность и привязку сотрудников. Распределение не применено автоматически.'}</p>{d.count !== null && <p>Назначено: {d.count} · Даты: {d.dates.map(dateLabel).join(', ')}</p>}</aside>)}
         {employeeId && ['plan', 'tasks', 'results'].includes(section) && renderCrm()}
         {loading ? <div className="empty"><div className="spinner"/><p>Загружаем планы…</p></div> : loadErrors.plans ? <p className="notice">Планы не удалось загрузить. Повторите загрузку выше; остальные разделы доступны.</p> : section === 'history' || section === 'reports' || (supervisor && !employeeId) ? <>
@@ -414,7 +452,7 @@ export default function App({ client = api, demo = false }: { client?: Client; d
               {!!t.locked && <p className="fine">{t.distribution_target_locked ? 'Количество задано подтверждённым распределением' : 'Плановые условия установлены руководителем'}</p>}
               {t.result && <p className="task-note"><b>Результат:</b> {t.result}</p>}{t.comment && <p className="task-note">{t.comment}</p>}
               {t.kind === 'bitrix' ? <p className="notice">Внешняя задача · Только чтение {t.external_url?.startsWith('https://') && <a href={t.external_url} target="_blank" rel="noreferrer">Открыть в Bitrix24 ↗</a>}</p> : t.status !== 'moved' && <div className="task-actions">
-                {!supervisor && t.status !== 'done' && (day === me.today || t.timer_started) && <><button className="timer-button" disabled={busy} onClick={() => act(`/tasks/${t.id}/timer`, 'POST', { action: t.timer_started ? 'pause' : 'start' }, t.timer_started ? 'Таймер на паузе' : 'Таймер запущен')}><Icon name={t.timer_started ? 'pause' : 'play'}/>{t.timer_started ? 'Пауза' : 'Начать'}</button>{t.timer_started && <button className="quiet" disabled={busy} onClick={() => act(`/tasks/${t.id}/timer`, 'POST', { action: 'stop' }, 'Таймер остановлен')}>Стоп</button>}</>}
+                {!supervisor && t.status !== 'done' && (day === today || t.timer_started) && <><button className="timer-button" disabled={busy} onClick={() => act(`/tasks/${t.id}/timer`, 'POST', { action: t.timer_started ? 'pause' : 'start' }, t.timer_started ? 'Таймер на паузе' : 'Таймер запущен')}><Icon name={t.timer_started ? 'pause' : 'play'}/>{t.timer_started ? 'Пауза' : 'Начать'}</button>{t.timer_started && <button className="quiet" disabled={busy} onClick={() => act(`/tasks/${t.id}/timer`, 'POST', { action: 'stop' }, 'Таймер остановлен')}>Стоп</button>}</>}
                 <button className="secondary" onClick={() => setModal({ type: 'task', task: t })}>{supervisor ? 'Изменить' : 'Внести результат'}</button>
                 {t.status !== 'done' && <button className="quiet" disabled={busy} onClick={() => act(`/tasks/${t.id}`, 'PATCH', { revision: t.revision, status: 'done' }, 'Задача выполнена')}><Icon name="check"/>Готово</button>}
                 <details className="more"><summary>Ещё</summary><div>{!supervisor && <button className="quiet" onClick={() => setModal({ type: 'goal', task: t })}>{t.distribution_target_locked ? 'Изменить плановое время' : 'Изменить цель / время'}</button>}{t.status !== 'done' && !t.distribution_target_locked && <button className="quiet" onClick={() => setModal({ type: 'move', task: t })}>Перенести задачу</button>}</div></details>
@@ -423,7 +461,7 @@ export default function App({ client = api, demo = false }: { client?: Client; d
             </section>)}</div>
             {!selectedTasks.length && <div className="empty small"><p>{tasks.length ? 'Задач с таким статусом нет.' : 'Добавьте первую задачу — остальное сложится в план.'}</p></div>}
           </>}
-          <div className="day-actions">{supervisor && plan.status === 'draft' && <button disabled={busy} onClick={() => act(`/plans/${plan.id}/approve`, 'POST', undefined, 'План утверждён')}>Утвердить план</button>}{plan.status !== 'closed' && day <= me.today && <button className="secondary" disabled={busy} onClick={() => setModal({ type: 'close' })}>Завершить рабочий день</button>}<button className="quiet" onClick={() => setShowAudit(!showAudit)}>{showAudit ? 'Скрыть историю изменений' : 'История изменений'}</button></div>
+          <div className="day-actions">{supervisor && plan.status === 'draft' && <button disabled={busy} onClick={() => act(`/plans/${plan.id}/approve`, 'POST', undefined, 'План утверждён')}>Утвердить план</button>}{plan.status !== 'closed' && day <= today && <button className="secondary" disabled={busy} onClick={() => setModal({ type: 'close' })}>Завершить рабочий день</button>}<button className="quiet" onClick={() => setShowAudit(!showAudit)}>{showAudit ? 'Скрыть историю изменений' : 'История изменений'}</button></div>
           {!supervisor && plan.status === 'draft' && <button disabled={busy} onClick={() => act(`/plans/${plan.id}/confirm`, 'POST', undefined, 'План подтверждён')}>Подтвердить план</button>}
           {showAudit && renderHistory()}
         </>}

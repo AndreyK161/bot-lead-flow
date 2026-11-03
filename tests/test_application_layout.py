@@ -54,7 +54,7 @@ class ApplicationLayoutTests(unittest.TestCase):
         with ExitStack() as patches:
             for target in ('deals.polling_loop', 'manual.recovery_loop', 'reports.daily_report_loop',
                            'reconcile.reconciliation_loop', 'outcomes.daily_sync_loop',
-                           '_bitrix_event_recovery_loop', 'distribution_flow.reminder_loop'):
+                           '_bitrix_event_recovery_loop', 'distribution_flow.reminder_loop', 'dialer.callback_recovery_loop'):
                 patches.enter_context(patch('apps.bot.backend.main.' + target, new=idle))
             initialize = patches.enter_context(patch('apps.planner.backend.api.initialize'))
             with TestClient(bot.app) as client:
@@ -70,7 +70,7 @@ class ApplicationLayoutTests(unittest.TestCase):
             workers = [patches.enter_context(patch('apps.bot.backend.main.' + target))
                        for target in ('deals.polling_loop', 'manual.recovery_loop', 'reports.daily_report_loop',
                                       'reconcile.reconciliation_loop', 'outcomes.daily_sync_loop',
-                                      '_bitrix_event_recovery_loop', 'distribution_flow.reminder_loop')]
+                                      '_bitrix_event_recovery_loop', 'distribution_flow.reminder_loop', 'dialer.callback_recovery_loop')]
             outbox = patches.enter_context(patch('apps.planner.backend.main.sync.outbox_sync_loop', side_effect=idle))
             with TestClient(planner.app) as client:
                 self.assertEqual(api.store.path, Path(self.settings.manager_planner_database_path))

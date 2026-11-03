@@ -1,6 +1,8 @@
 """Durable manager call queue backed by the Lead Flow database."""
 from __future__ import annotations
 
+import asyncio
+import time as system_time
 import hashlib
 import json
 import logging
@@ -373,6 +375,10 @@ async def resolve(
     if not rows:
         raise DialerError("Клиент не найден в очереди.", 404)
     item = rows[0]
+    if result in {"answered", "failed", "voicemail"} and item["status"] != "awaiting_confirmation":
+        raise DialerError("Результат звонка уже изменился. Обновите очередь.", 409)
+    if result in {"skipped", "postponed"} and item["status"] not in {"pending", "error", "awaiting_confirmation"}:
+        raise DialerError("Состояние клиента уже изменилось. Обновите очередь.", 409)
     if result == "retry":
         new_status = "pending"
         stored_result = "retry"
@@ -383,33 +389,46 @@ async def resolve(
         new_status = result
         stored_result = result
     with store.db() as conn:
-        conn.execute(
+        # Compare the state read by this request inside the UPDATE. A second
+        # tab must not overwrite a result that another request already saved.
+        updated = conn.execute(
             """UPDATE dialer_queue_items SET status=?,last_result=?,updated_at=CURRENT_TIMESTAMP
-               WHERE id=? AND session_id=?""", (new_status, stored_result, item_id, session_id),
+               WHERE id=? AND session_id=? AND status=?
+               AND COALESCE(last_call_id,'')=COALESCE(?,'')
+               AND NOT EXISTS (
+                   SELECT 1 FROM dialer_queue_items other
+                   WHERE other.session_id=? AND other.id<>?
+                   AND other.status IN ('starting','calling','connected','awaiting_confirmation')
+               )""",
+            (new_status, stored_result, item_id, session_id, item["status"],
+             item.get("last_call_id"), session_id, item_id),
         )
+        if updated.rowcount != 1:
+            raise DialerError("Очередь уже изменилась. Обновите её и повторите действие.", 409)
         if item.get("last_call_id"):
             conn.execute(
                 """UPDATE dialer_call_attempts SET status='completed',result=?,finished_at=CURRENT_TIMESTAMP,
                    updated_at=CURRENT_TIMESTAMP WHERE call_id=?""",
                 (stored_result, item["last_call_id"]),
             )
-        conn.execute(
+        changed = conn.execute(
             "UPDATE dialer_sessions SET status=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status IN ('active','paused')",
             ("paused" if result == "answered" else "active", session_id),
         )
+        if changed.rowcount != 1:
+            raise DialerError("Очередь уже завершена.", 409)
     await _comment(item, str(session["manager_name"]), stored_result)
     if result != "answered" and int(session["auto_advance"]):
         return await start_next(session_id, telegram_id)
     if result == "answered":
-        pending = store.rows(
-            "SELECT 1 FROM dialer_queue_items WHERE session_id=? AND status IN ('pending','error') LIMIT 1",
-            (session_id,),
+        store.execute(
+            """UPDATE dialer_sessions SET status='completed',updated_at=CURRENT_TIMESTAMP
+               WHERE id=? AND status IN ('active','paused') AND NOT EXISTS (
+                   SELECT 1 FROM dialer_queue_items WHERE session_id=?
+                   AND status IN ('pending','error','starting','calling','connected','awaiting_confirmation')
+               )""",
+            (session_id, session_id),
         )
-        if not pending:
-            store.execute(
-                "UPDATE dialer_sessions SET status='completed',updated_at=CURRENT_TIMESTAMP WHERE id=? AND status IN ('active','paused')",
-                (session_id,),
-            )
     return session_payload(session_id, telegram_id)
 
 
@@ -422,7 +441,7 @@ def cancel(session_id: str, telegram_id: int) -> dict:
     return session_payload(session_id, telegram_id)
 
 
-async def process_callback(data: dict) -> bool:
+async def _apply_callback(data: dict) -> bool:
     call_id = str(data.get("callid") or data.get("call_id") or data.get("callId") or "").strip()
     if not call_id:
         return False
@@ -441,6 +460,13 @@ async def process_callback(data: dict) -> bool:
         ensure_ascii=False, separators=(",", ":"),
     )
     event_key = hashlib.sha256(fingerprint.encode()).hexdigest()
+    result = HISTORY_RESULT.get(history_status.casefold(), "no_answer")
+    try:
+        duration = max(0, int(float(data.get("duration") or 0)))
+    except (TypeError, ValueError, OverflowError):
+        duration = 0
+    # Recording the event and applying it are one transaction. An old attempt
+    # may finish in history, but only the current call can change the queue.
     with store.db() as conn:
         inserted = conn.execute(
             """INSERT INTO dialer_call_events(event_key,call_id,command,event_type,direction,status)
@@ -450,31 +476,35 @@ async def process_callback(data: dict) -> bool:
         if inserted.rowcount != 1:
             return True
         if command == "event" and event_type.upper() == "ACCEPTED":
-            conn.execute(
+            connected = conn.execute(
                 """UPDATE dialer_call_attempts SET status='connected',connected_at=COALESCE(connected_at,CURRENT_TIMESTAMP),
-                   updated_at=CURRENT_TIMESTAMP WHERE call_id=?""", (call_id,),
+                   updated_at=CURRENT_TIMESTAMP WHERE call_id=? AND status IN ('starting','calling','connected')""",
+                (call_id,),
             )
-            conn.execute(
-                """UPDATE dialer_queue_items SET status='connected',updated_at=CURRENT_TIMESTAMP
-                   WHERE id=? AND status IN ('starting','calling')""", (attempt["item_id"],),
-            )
-    if command != "history":
-        return True
-    result = HISTORY_RESULT.get(history_status.casefold(), "no_answer")
-    try:
-        duration = max(0, int(float(data.get("duration") or 0)))
-    except (TypeError, ValueError):
-        duration = 0
-    with store.db() as conn:
-        conn.execute(
+            if connected.rowcount:
+                conn.execute(
+                    """UPDATE dialer_queue_items SET status='connected',updated_at=CURRENT_TIMESTAMP
+                       WHERE id=? AND last_call_id=? AND status='calling'""",
+                    (attempt["item_id"], call_id),
+                )
+            return True
+        if command != "history":
+            return True
+        completed = conn.execute(
             """UPDATE dialer_call_attempts SET status='completed',result=?,duration_seconds=?,
-               finished_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE call_id=?""",
+               finished_at=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP
+               WHERE call_id=? AND status IN ('starting','calling','connected')""",
             (history_status or result, duration, call_id),
         )
-        conn.execute(
+        if completed.rowcount != 1:
+            return True
+        updated = conn.execute(
             """UPDATE dialer_queue_items SET status=?,last_result=?,updated_at=CURRENT_TIMESTAMP
-               WHERE id=?""", (result, history_status or result, attempt["item_id"]),
+               WHERE id=? AND last_call_id=? AND status IN ('calling','connected')""",
+            (result, history_status or result, attempt["item_id"], call_id),
         )
+        if updated.rowcount != 1:
+            return True
         conn.execute(
             "UPDATE dialer_sessions SET status=?,updated_at=CURRENT_TIMESTAMP WHERE id=? AND status IN ('active','paused')",
             ("paused" if result == "awaiting_confirmation" else "active", attempt["session_id"]),
@@ -489,3 +519,75 @@ async def process_callback(data: dict) -> bool:
             except DialerError:
                 logger.exception("Dialer automatic next call failed session=%s", attempt["session_id"])
     return True
+
+
+def _callback_payload(data: dict) -> dict:
+    # Store only call metadata, never webhook credentials or arbitrary fields.
+    return {
+        "callid": str(data.get("callid") or data.get("call_id") or data.get("callId") or "").strip(),
+        "cmd": str(data.get("cmd") or "").strip().lower(),
+        "type": str(data.get("type") or "").strip(),
+        "direction": str(data.get("direction") or "").strip().lower(),
+        "status": str(data.get("status") or "").strip(),
+        "start": str(data.get("start") or ""),
+        "duration": str(data.get("duration") or ""),
+    }
+
+
+async def process_callback(data: dict) -> bool:
+    payload = _callback_payload(data)
+    call_id = payload["callid"]
+    if not call_id:
+        return False
+    fingerprint = json.dumps(list(payload.values()), ensure_ascii=False, separators=(",", ":"))
+    event_key = hashlib.sha256(fingerprint.encode()).hexdigest()
+    attempts = store.rows("SELECT id FROM dialer_call_attempts WHERE call_id=? LIMIT 1", (call_id,))
+    if not attempts:
+        if payload["cmd"] != "history" and not (payload["cmd"] == "event" and payload["type"].upper() == "ACCEPTED"):
+            return False
+        with store.db() as conn:
+            conn.execute(
+                """INSERT INTO dialer_pending_callbacks(event_key,call_id,payload,received_at)
+                   SELECT ?,?,?,? WHERE EXISTS (
+                       SELECT 1 FROM dialer_call_attempts WHERE status='starting' AND call_id IS NULL
+                   ) ON CONFLICT(event_key) DO NOTHING""",
+                (event_key, call_id, json.dumps(payload, ensure_ascii=False), int(system_time.time())),
+            )
+        # The HTTP response may have bound the call while we were saving it.
+        attempts = store.rows("SELECT id FROM dialer_call_attempts WHERE call_id=? LIMIT 1", (call_id,))
+        if not attempts:
+            return bool(store.rows("SELECT 1 FROM dialer_pending_callbacks WHERE event_key=?", (event_key,)))
+    handled = await _apply_callback(payload)
+    if handled:
+        store.execute("DELETE FROM dialer_pending_callbacks WHERE event_key=?", (event_key,))
+    return handled
+
+
+async def replay_pending_callbacks() -> None:
+    # Unrelated telephony calls buffered during the HTTP window expire. Bound
+    # events survive retries and process restarts until successfully handled.
+    store.execute(
+        """DELETE FROM dialer_pending_callbacks WHERE received_at<? AND NOT EXISTS (
+               SELECT 1 FROM dialer_call_attempts a WHERE a.call_id=dialer_pending_callbacks.call_id
+           )""",
+        (int(system_time.time()) - 3600,),
+    )
+    pending = store.rows(
+        """SELECT p.payload FROM dialer_pending_callbacks p
+           WHERE EXISTS (SELECT 1 FROM dialer_call_attempts a WHERE a.call_id=p.call_id)
+           ORDER BY p.received_at,p.event_key LIMIT 100"""
+    )
+    for row in pending:
+        try:
+            await process_callback(json.loads(row["payload"]))
+        except Exception:
+            logger.exception("Dialer pending callback will be retried")
+
+
+async def callback_recovery_loop() -> None:
+    while True:
+        try:
+            await replay_pending_callbacks()
+        except Exception:
+            logger.exception("Dialer callback recovery temporarily unavailable")
+        await asyncio.sleep(2)

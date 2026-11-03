@@ -12,7 +12,7 @@ from urllib.parse import urlparse
 from fastapi import FastAPI, HTTPException, Request, status
 from fastapi.responses import JSONResponse
 
-from apps.bot.backend import call_tracking, deals, distribution_flow, journal, manual, miniapp, outcomes, period_reports, planner_access, reconcile, reports, stats, store
+from apps.bot.backend import call_tracking, dialer, deals, distribution_flow, journal, manual, miniapp, outcomes, period_reports, planner_access, reconcile, reports, stats, store
 from apps.bot.backend.bitrix_client import (
     LEAD_PREFERRED_CALL_TIME_FIELD,
     BitrixApiError,
@@ -58,6 +58,7 @@ async def lifespan(app):
         except Exception:
             logger.exception("Failed to configure Mini App menu button for user_id=%s", account_id)
     tasks = {
+        "dialer_callback_recovery": asyncio.create_task(dialer.callback_recovery_loop(), name="dialer_callback_recovery"),
         "deal_polling": asyncio.create_task(deals.polling_loop(), name="deal_polling"),
         "manual_recovery": asyncio.create_task(manual.recovery_loop(), name="manual_recovery"),
         "daily_reports": asyncio.create_task(reports.daily_report_loop(), name="daily_reports"),
