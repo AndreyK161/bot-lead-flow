@@ -611,33 +611,40 @@ class BitrixClient:
     ) -> list[dict[str, Any]]:
         return await self._get_by_ids("crm.deal.list", deal_ids, select or DEAL_SELECT_FIELDS)
 
-    async def get_deals_by_lead_ids(self, lead_ids: list[str], category_id: str = "0") -> list[dict[str, Any]]:
+    async def get_deals_by_lead_ids(
+        self, lead_ids: list[str], category_id: str | None = "0",
+    ) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
         unique_ids = list(dict.fromkeys(str(value) for value in lead_ids if value))
         for offset in range(0, len(unique_ids), 50):
+            filters: dict[str, Any] = {
+                "LEAD_ID": unique_ids[offset:offset + 50],
+            }
+            if category_id is not None:
+                filters["CATEGORY_ID"] = str(category_id)
             result.extend(await self._call_all("crm.deal.list", {
                 "order": {"ID": "ASC"},
-                "filter": {
-                    "CATEGORY_ID": str(category_id),
-                    "LEAD_ID": unique_ids[offset:offset + 50],
-                },
+                "filter": filters,
                 "select": DEAL_SELECT_FIELDS,
             }))
         return result
 
     async def get_deals_by_contact_ids(
-        self, contact_ids: list[str], category_id: str = "0", *, extra_fields: list[str] | None = None,
+        self, contact_ids: list[str], category_id: str | None = "0", *,
+        extra_fields: list[str] | None = None,
     ) -> list[dict[str, Any]]:
         result: list[dict[str, Any]] = []
         unique_ids = list(dict.fromkeys(str(value) for value in contact_ids if value and str(value) != "0"))
         select = list(dict.fromkeys(DEAL_SELECT_FIELDS + list(extra_fields or [])))
         for offset in range(0, len(unique_ids), 50):
+            filters: dict[str, Any] = {
+                "CONTACT_ID": unique_ids[offset:offset + 50],
+            }
+            if category_id is not None:
+                filters["CATEGORY_ID"] = str(category_id)
             result.extend(await self._call_all("crm.deal.list", {
                 "order": {"ID": "ASC"},
-                "filter": {
-                    "CATEGORY_ID": str(category_id),
-                    "CONTACT_ID": unique_ids[offset:offset + 50],
-                },
+                "filter": filters,
                 "select": select,
             }))
         return result

@@ -353,11 +353,13 @@ async def _notify_original_owner_of_duplicate(
     """Warn the manager responsible for the original lead/deal about a repeat request."""
     try:
         original_lead = await client.get_lead(original_lead_id)
-        deals_for_lead = await client.get_deals_by_lead_ids([str(original_lead_id)])
+        deals_for_lead = await client.get_deals_by_lead_ids(
+            [str(original_lead_id)], category_id=None,
+        )
         if not deals_for_lead and original_lead.get("CONTACT_ID"):
             deals_for_lead = await client.get_deals_by_contact_ids([
                 str(original_lead["CONTACT_ID"]),
-            ])
+            ], category_id=None)
         original_deal = max(
             deals_for_lead,
             key=lambda item: int(item.get("ID") or 0),

@@ -258,6 +258,9 @@ class BitrixWebhookTests(WebhookTestCase):
             self.client, self.settings, {'ID': '20312'}, '999',
         )
 
+        self.client.get_deals_by_lead_ids.assert_awaited_once_with(
+            ['999'], category_id=None,
+        )
         self.send_message.assert_awaited_once()
         self.assertEqual(self.send_message.call_args.kwargs['chat_id'], 777)
         text = self.send_message.call_args.args[0]
@@ -279,7 +282,9 @@ class BitrixWebhookTests(WebhookTestCase):
             self.client, self.settings, {'ID': '20312'}, '999',
         )
 
-        self.client.get_deals_by_contact_ids.assert_awaited_once_with(['88'])
+        self.client.get_deals_by_contact_ids.assert_awaited_once_with(
+            ['88'], category_id=None,
+        )
         self.assertEqual(self.send_message.call_args.kwargs['chat_id'], 777)
         self.assertIn('/crm/deal/details/501/', self.send_message.call_args.args[0])
 
