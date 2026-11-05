@@ -60,7 +60,14 @@ services:
       context: .
       target: bot
     restart: unless-stopped
-    command: ["rq", "worker", "--url", "redis://redis:6379/0", "--with-scheduler", "telegram"]
+    command:
+      - rq
+      - worker
+      - --url
+      - redis://redis:6379/0
+      - --with-scheduler
+      - --disable-job-desc-logging
+      - telegram
     env_file: .env
     environment:
       DATABASE_URL: postgresql://bot_lead_flow:${POSTGRES_PASSWORD}@postgres:5432/bot_lead_flow
@@ -68,6 +75,11 @@ services:
     depends_on:
       redis:
         condition: service_healthy
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "5"
 
   planner:
     container_name: leadflow-planner

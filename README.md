@@ -451,7 +451,8 @@ AOF (`appendfsync everysec`), поэтому очередь переживает
 временно недоступен при постановке задачи, приложение отправляет уведомление
 напрямую. `/health` проверяет Redis и реестр окончательно упавших задач, а
 внешний watchdog отдельно контролирует контейнеры `leadflow-redis` и
-`leadflow-telegram-worker`.
+`leadflow-telegram-worker`. Worker не пишет описание job и содержимое Telegram-
+сообщения в Docker logs; журнал ограничен пятью файлами по 10 МБ.
 
 ## База данных в production
 
