@@ -17,6 +17,7 @@ from apps.bot.backend.config import get_settings, lead_notification_recipient_id
 from apps.bot.backend.formatter import build_lead_notification, build_manage_keyboard
 from apps.bot.backend.sales_team import assignable_sales_users
 from apps.bot.backend.telegram_client import edit_message_text, send_telegram_message
+from apps.bot.backend.telegram_queue import enqueue_telegram_message
 
 logger = logging.getLogger(__name__)
 lock = asyncio.Lock()
@@ -237,7 +238,13 @@ async def _create(row, telegram_user_id):
         )
         for manager_chat_id in manager_chat_ids:
             try:
-                await send_telegram_message(text, chat_id=manager_chat_id)
+                await enqueue_telegram_message(
+                    text,
+                    chat_id=manager_chat_id,
+                    idempotency_key=(
+                        f"lead:{lead_id}:manual-assigned:manager:{manager_chat_id}"
+                    ),
+                )
             except Exception:
                 logger.exception(
                     "Failed to notify manager telegram_id=%s about manual lead_id=%s",

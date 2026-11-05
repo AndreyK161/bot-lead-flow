@@ -40,6 +40,7 @@ from apps.bot.backend.telegram_client import (
     send_telegram_message,
     set_chat_menu_button,
 )
+from apps.bot.backend.telegram_queue import enqueue_telegram_message
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger("bot-lead-flow")
@@ -257,7 +258,12 @@ async def _process_bitrix_event(event: str, entity_id: str | None) -> dict[str, 
     keyboard = build_manage_keyboard(lead_id)
     for admin_id in lead_notification_recipient_ids(settings):
         try:
-            await send_telegram_message(message, chat_id=admin_id, reply_markup=keyboard)
+            await enqueue_telegram_message(
+                message,
+                chat_id=admin_id,
+                reply_markup=keyboard,
+                idempotency_key=f"lead:{lead_id}:created:admin:{admin_id}",
+            )
         except Exception:
             # Например, руководитель ещё ни разу не писал боту в личку — бот не может начать диалог первым.
             logger.exception("Failed to send Telegram DM to admin_id=%s for lead_id=%s", admin_id, lead_id)
@@ -342,7 +348,11 @@ async def _notify_assigned_manager(client: BitrixClient, settings, lead_id: str,
         return
     for manager_chat_id in manager_chat_ids:
         try:
-            await send_telegram_message(text, chat_id=manager_chat_id)
+            await enqueue_telegram_message(
+                text,
+                chat_id=manager_chat_id,
+                idempotency_key=f"lead:{lead_id}:assigned:manager:{manager_chat_id}",
+            )
         except Exception:
             logger.exception("Failed to notify manager telegram_id=%s about lead_id=%s", manager_chat_id, lead_id)
 
@@ -401,7 +411,14 @@ async def _notify_original_owner_of_duplicate(
         return
     for manager_chat_id in manager_chat_ids:
         try:
-            await send_telegram_message(text, chat_id=manager_chat_id)
+            await enqueue_telegram_message(
+                text,
+                chat_id=manager_chat_id,
+                idempotency_key=(
+                    f"lead:{duplicate_lead.get('ID')}:duplicate-of:{original_lead_id}:"
+                    f"manager:{manager_chat_id}"
+                ),
+            )
         except Exception:
             logger.exception(
                 "Failed to notify original owner telegram_id=%s duplicate_lead_id=%s",
@@ -833,6 +850,15 @@ async def health():
         checks["database"] = "ok"
     except Exception:
         checks["database"] = "unavailable"
+        healthy = False
+
+    try:
+        from apps.bot.backend import telegram_queue
+        queue_state = await asyncio.to_thread(telegram_queue.health)
+        checks["telegram_queue"] = queue_state
+        healthy = healthy and int(queue_state.get("failed") or 0) == 0
+    except Exception:
+        checks["telegram_queue"] = {"status": "unavailable"}
         healthy = False
 
     tasks = getattr(app.state, "background_tasks", {})

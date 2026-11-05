@@ -32,6 +32,9 @@ class Settings(BaseSettings):
     telegram_chat_id: str
     telegram_notification_chat_ids: str = ""
     system_notification_chat_id: str = "1297686797"
+    redis_url: str = "redis://redis:6379/0"
+    telegram_queue_name: str = "telegram"
+    telegram_queue_max_retries: int = 8
 
     @property
     def notification_chat_ids(self) -> list[str]:

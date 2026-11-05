@@ -5,3 +5,5 @@ pydantic-settings==2.5.2
 python-multipart==0.0.9
 psycopg[binary]==3.2.10
 openpyxl==3.1.5
+redis==7.4.1
+rq==2.12.0

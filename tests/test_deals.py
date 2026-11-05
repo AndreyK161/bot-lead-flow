@@ -22,8 +22,12 @@ class DealTrackingTests(unittest.IsolatedAsyncioTestCase):
         self.client.get_source_name.return_value='TikTok'
         self.client.get_user_name.return_value='Менеджер'
         self.send=AsyncMock(side_effect=[{'message_id':1},{'message_id':2}])
+        async def queued_delivery(text, *, chat_id, reply_markup=None, idempotency_key):
+            return await self.send(text, chat_id=chat_id, reply_markup=reply_markup)
+        self.enqueue=AsyncMock(side_effect=queued_delivery)
         self.patches=[patch('apps.bot.backend.store.get_settings',return_value=self.settings),patch('apps.bot.backend.deals.get_settings',return_value=self.settings),
                       patch('apps.bot.backend.deals.BitrixClient',return_value=self.client),patch('apps.bot.backend.deals.send_telegram_message',new=self.send),
+                      patch('apps.bot.backend.deals.enqueue_telegram_message',new=self.enqueue),
                       patch('apps.bot.backend.deals.edit_message_text',new=AsyncMock())]
         for item in self.patches:item.start()
         deals.lock=asyncio.Lock()

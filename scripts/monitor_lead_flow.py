@@ -113,6 +113,8 @@ def run_checks() -> dict[str, str]:
         "bot container": lambda: docker_state("leadflow-bot"),
         "planner container": lambda: docker_state("leadflow-planner"),
         "postgres container": lambda: docker_state("bot-lead-flow-postgres-1"),
+        "redis container": lambda: docker_state("leadflow-redis"),
+        "telegram worker": lambda: docker_state("leadflow-telegram-worker"),
         "bot health": lambda: http_json("http://127.0.0.1:8081/health"),
         "planner health": lambda: http_json("http://127.0.0.1:8082/health"),
         "public bot": lambda: http_json("https://tg.prav-buro.ru/health"),

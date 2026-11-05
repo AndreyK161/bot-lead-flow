@@ -31,10 +31,14 @@ class ManualMainBotTests(unittest.IsolatedAsyncioTestCase):
         self.client.get_user_name.return_value='Иван Иванов'
         self.client.find_active_duplicate_lead.return_value=None
         self.send=AsyncMock(side_effect=lambda text,**kwargs:{'message_id':100})
+        async def queued_delivery(text, *, chat_id, reply_markup=None, idempotency_key):
+            return await self.send(text, chat_id=chat_id, reply_markup=reply_markup)
+        self.enqueue=AsyncMock(side_effect=queued_delivery)
         self.edit=AsyncMock()
         self.patches=[
             patch('apps.bot.backend.store.get_settings',return_value=self.settings), patch('apps.bot.backend.manual.get_settings',return_value=self.settings),
             patch('apps.bot.backend.manual.BitrixClient',return_value=self.client), patch('apps.bot.backend.manual.send_telegram_message',new=self.send),
+            patch('apps.bot.backend.manual.enqueue_telegram_message',new=self.enqueue),
             patch('apps.bot.backend.manual.edit_message_text',new=self.edit),
         ]
         for item in self.patches:item.start()

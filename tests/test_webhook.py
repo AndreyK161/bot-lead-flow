@@ -50,11 +50,17 @@ class WebhookTestCase(unittest.IsolatedAsyncioTestCase):
         self.bitrix_patch.start()
 
         self.send_message = AsyncMock(return_value={'message_id': 42, 'chat': {'id': -100}})
+        async def queued_delivery(text, *, chat_id, reply_markup=None, idempotency_key):
+            return await self.send_message(
+                text, chat_id=chat_id, reply_markup=reply_markup,
+            )
+        self.enqueue_message = AsyncMock(side_effect=queued_delivery)
         self.edit_markup = AsyncMock()
         self.edit_text = AsyncMock()
         self.answer_cb = AsyncMock()
         self.tg_patches = [
             patch('apps.bot.backend.main.send_telegram_message', new=self.send_message),
+            patch('apps.bot.backend.main.enqueue_telegram_message', new=self.enqueue_message),
             patch('apps.bot.backend.main.edit_message_reply_markup', new=self.edit_markup),
             patch('apps.bot.backend.main.edit_message_text', new=self.edit_text),
             patch('apps.bot.backend.main.answer_callback_query', new=self.answer_cb),
@@ -114,6 +120,10 @@ class BitrixWebhookTests(WebhookTestCase):
         self.assertEqual(self.send_message.await_count, 2)
         chat_ids = {call.kwargs['chat_id'] for call in self.send_message.call_args_list}
         self.assertEqual(chat_ids, {100, 101})
+        self.assertTrue(all(
+            call.kwargs['idempotency_key'].startswith('lead:20312:created:admin:')
+            for call in self.enqueue_message.call_args_list
+        ))
 
     async def test_adds_preferred_call_time_to_bitrix_comments_and_notification(self):
         self.client.get_lead.return_value = {

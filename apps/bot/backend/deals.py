@@ -10,6 +10,7 @@ from apps.bot.backend.bitrix_client import BitrixClient
 from apps.bot.backend.config import get_settings, lead_notification_recipient_ids
 from apps.bot.backend.formatter import build_deal_manage_keyboard, build_deal_notification
 from apps.bot.backend.telegram_client import edit_message_text, send_telegram_message
+from apps.bot.backend.telegram_queue import enqueue_telegram_message
 
 logger = logging.getLogger(__name__)
 lock = asyncio.Lock()
@@ -83,7 +84,13 @@ async def notify_assigned_manager(deal: dict, bitrix_user_id: str) -> None:
     text = "📌 <b>На вас назначена сделка</b>\n\n" + await render(deal)
     for manager_chat_id in manager_chat_ids:
         try:
-            await send_telegram_message(text, chat_id=manager_chat_id)
+            await enqueue_telegram_message(
+                text,
+                chat_id=manager_chat_id,
+                idempotency_key=(
+                    f"deal:{deal.get('ID')}:assigned:manager:{manager_chat_id}"
+                ),
+            )
         except Exception:
             logger.exception(
                 "Failed to notify manager telegram_id=%s about deal_id=%s",

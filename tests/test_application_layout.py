@@ -32,6 +32,10 @@ class ApplicationLayoutTests(unittest.TestCase):
             self.enterContext(patch(target, return_value=self.settings))
         self.enterContext(patch('apps.bot.backend.main.set_chat_menu_button', new=AsyncMock()))
         self.enterContext(patch('apps.bot.backend.main.close_http_client', new=AsyncMock()))
+        self.enterContext(patch(
+            'apps.bot.backend.telegram_queue.health',
+            return_value={'status': 'ok', 'queued': 0, 'failed': 0, 'scheduled': 0},
+        ))
         self.enterContext(patch('apps.planner.backend.main.close_http_client', new=AsyncMock()))
 
     def test_planner_html_and_assets_keep_existing_urls(self):
