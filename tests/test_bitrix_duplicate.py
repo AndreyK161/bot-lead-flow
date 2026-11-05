@@ -93,6 +93,37 @@ class DuplicateLeadTests(unittest.IsolatedAsyncioTestCase):
 
         self.assertEqual(result, '5')
 
+    async def test_failed_lead_still_makes_new_request_a_duplicate(self):
+        client = self.client()
+        client.find_duplicate_lead_ids = AsyncMock(return_value=['5', '7'])
+        client.get_leads_by_ids = AsyncMock(return_value=[
+            {'ID': '5', 'STATUS_ID': 'JUNK', 'STATUS_SEMANTIC_ID': 'F'},
+            {'ID': '7', 'STATUS_ID': 'UC_DUP', 'STATUS_SEMANTIC_ID': 'P'},
+        ])
+        client.get_lead_statuses = AsyncMock(return_value=[
+            {'STATUS_ID': 'JUNK', 'NAME': 'Некачественный лид'},
+            {'STATUS_ID': 'UC_DUP', 'NAME': 'Дубль'},
+        ])
+
+        result = await client.find_duplicate_origin_lead(['+79991234567'])
+
+        self.assertEqual(result, '5')
+
+    async def test_legacy_duplicate_history_is_used_when_no_other_origin_exists(self):
+        client = self.client()
+        client.find_duplicate_lead_ids = AsyncMock(return_value=['9', '7'])
+        client.get_leads_by_ids = AsyncMock(return_value=[
+            {'ID': '9', 'STATUS_ID': 'UC_DUP', 'STATUS_SEMANTIC_ID': 'P'},
+            {'ID': '7', 'STATUS_ID': 'UC_DUP', 'STATUS_SEMANTIC_ID': 'P'},
+        ])
+        client.get_lead_statuses = AsyncMock(return_value=[
+            {'STATUS_ID': 'UC_DUP', 'NAME': 'Дубль'},
+        ])
+
+        result = await client.find_duplicate_origin_lead(['+79991234567'])
+
+        self.assertEqual(result, '7')
+
     async def test_duplicate_is_failed_with_reason_from_bitrix_enumeration(self):
         client = self.client()
         settings = SimpleNamespace(

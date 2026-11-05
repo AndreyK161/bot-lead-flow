@@ -787,11 +787,12 @@ class BitrixClient:
         exclude_lead_id: str | int | None = None,
         extra_candidate_ids: list[str] | None = None,
     ) -> str | None:
-        """Find the earliest genuine working/converted lead for a repeat request.
+        """Find the earliest prior lead for a repeat request.
 
-        Converted leads remain relevant because their manager usually owns the
-        resulting deal. Legacy leads already placed on a stage named «Дубль»
-        must never become the canonical origin of another duplicate.
+        Working, converted and failed leads all qualify as prior requests.
+        Prefer a non-legacy lead as the canonical origin; if the entire history
+        already consists of the old operational «Дубль» stage, retain the
+        earliest of those records so the next request is still caught.
         """
         candidates = set(await self.find_duplicate_lead_ids(phones))
         candidates.update(str(item) for item in (extra_candidate_ids or []))
@@ -809,14 +810,17 @@ class BitrixClient:
         }
         relevant = [
             item for item in leads
-            if str(item.get("STATUS_SEMANTIC_ID") or "") in {"P", "S"}
+            if str(item.get("STATUS_SEMANTIC_ID") or "") in {"P", "S", "F"}
             and str(item.get("STATUS_ID") or "") not in duplicate_status_ids
         ]
-        if not relevant:
+        legacy_duplicates = [
+            item for item in leads
+            if str(item.get("STATUS_ID") or "") in duplicate_status_ids
+        ]
+        pool = relevant or legacy_duplicates
+        if not pool:
             return None
-        # The first genuine request is the origin, whether it is still active
-        # or has already been converted into a deal.
-        original = min(relevant, key=lambda item: int(item.get("ID") or 0))
+        original = min(pool, key=lambda item: int(item.get("ID") or 0))
         return str(original["ID"])
 
     async def move_deal_to_junk(self, deal_id: str | int) -> dict[str, Any]:

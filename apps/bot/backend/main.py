@@ -381,20 +381,69 @@ async def _notify_original_owner_of_duplicate(
             or ""
         )
         manager_chat_ids = store.manager_telegram_ids(owner_id)
+        reference_lead = original_lead
+        reference_lead_id = str(original_lead_id)
+        reference_deal = original_deal
+        if not manager_chat_ids:
+            phones = [
+                item.get("VALUE") for item in (duplicate_lead.get("PHONE") or [])
+                if item.get("VALUE")
+            ]
+            candidate_ids = set(await client.find_duplicate_lead_ids(phones)) if phones else set()
+            candidate_ids.discard(str(duplicate_lead.get("ID") or ""))
+            history = await client.get_leads_by_ids(list(candidate_ids)) if candidate_ids else []
+
+            history_deals = await client.get_deals_by_lead_ids(
+                list(candidate_ids), category_id=None,
+            ) if candidate_ids else []
+            contact_ids = list(dict.fromkeys(
+                str(item.get("CONTACT_ID")) for item in history
+                if item.get("CONTACT_ID") and str(item.get("CONTACT_ID")) != "0"
+            ))
+            if contact_ids:
+                history_deals.extend(await client.get_deals_by_contact_ids(
+                    contact_ids, category_id=None,
+                ))
+            unique_deals = {
+                str(item.get("ID")): item for item in history_deals if item.get("ID")
+            }
+            for deal in sorted(
+                unique_deals.values(), key=lambda item: int(item.get("ID") or 0), reverse=True,
+            ):
+                fallback_chat_ids = store.manager_telegram_ids(str(deal.get("ASSIGNED_BY_ID") or ""))
+                if fallback_chat_ids:
+                    manager_chat_ids = fallback_chat_ids
+                    reference_deal = deal
+                    break
+            if not manager_chat_ids:
+                for item in sorted(
+                    history, key=lambda row: int(row.get("ID") or 0), reverse=True,
+                ):
+                    fallback_chat_ids = store.manager_telegram_ids(
+                        str(item.get("ASSIGNED_BY_ID") or ""),
+                    )
+                    if fallback_chat_ids:
+                        manager_chat_ids = fallback_chat_ids
+                        reference_lead = item
+                        reference_lead_id = str(item.get("ID") or original_lead_id)
+                        reference_deal = None
+                        break
         if not manager_chat_ids:
             return
 
         portal = _portal_domain(settings.bitrix_webhook_url)
         duplicate_id = str(duplicate_lead.get("ID") or "")
         duplicate_url = f"https://{portal}/crm/lead/details/{duplicate_id}/"
-        if original_deal:
-            original_id = str(original_deal.get("ID") or "")
+        if reference_deal:
+            original_id = str(reference_deal.get("ID") or "")
             original_url = f"https://{portal}/crm/deal/details/{original_id}/"
             original_label = "исходной сделкой"
         else:
-            original_id = str(original_lead_id)
+            original_id = reference_lead_id
             original_url = f"https://{portal}/crm/lead/details/{original_id}/"
-            original_label = "исходным лидом"
+            original_label = (
+                "исходным лидом" if reference_lead is original_lead else "предыдущим лидом"
+            )
         text = (
             "⚠️ <b>Повторное обращение вашего клиента</b>\n\n"
             f'Новый <a href="{escape(duplicate_url)}">лид №{escape(duplicate_id)}</a> '

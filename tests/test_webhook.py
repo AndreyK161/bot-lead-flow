@@ -45,6 +45,8 @@ class WebhookTestCase(unittest.IsolatedAsyncioTestCase):
         self.client.get_department_users.return_value = [{'ID': '460', 'NAME': 'Никита', 'LAST_NAME': 'Продажников'}]
         self.client.get_deals_by_lead_ids.return_value = []
         self.client.get_deals_by_contact_ids.return_value = []
+        self.client.find_duplicate_lead_ids.return_value = []
+        self.client.get_leads_by_ids.return_value = []
         self.client.find_duplicate_origin_lead.return_value = None
         self.bitrix_patch = patch('apps.bot.backend.main.BitrixClient', return_value=self.client)
         self.bitrix_patch.start()
@@ -297,6 +299,33 @@ class BitrixWebhookTests(WebhookTestCase):
         )
         self.assertEqual(self.send_message.call_args.kwargs['chat_id'], 777)
         self.assertIn('/crm/deal/details/501/', self.send_message.call_args.args[0])
+
+    async def test_latest_linked_manager_is_warned_when_failed_origin_has_no_link(self):
+        store.link_manager('110', 'Яна Азизова', 778)
+        self.client.get_lead.return_value = {
+            'ID': '22864', 'ASSIGNED_BY_ID': '26',
+        }
+        self.client.get_deals_by_lead_ids.return_value = []
+        self.client.find_duplicate_lead_ids.return_value = [
+            '22864', '22874', '22892', '22920',
+        ]
+        self.client.get_leads_by_ids.return_value = [
+            {'ID': '22864', 'ASSIGNED_BY_ID': '26'},
+            {'ID': '22874', 'ASSIGNED_BY_ID': '26'},
+            {'ID': '22892', 'ASSIGNED_BY_ID': '110'},
+        ]
+
+        await main._notify_original_owner_of_duplicate(
+            self.client,
+            self.settings,
+            {'ID': '22920', 'PHONE': [{'VALUE': '+79991234567'}]},
+            '22864',
+        )
+
+        self.assertEqual(self.send_message.call_args.kwargs['chat_id'], 778)
+        text = self.send_message.call_args.args[0]
+        self.assertIn('предыдущим лидом', text)
+        self.assertIn('/crm/lead/details/22892/', text)
 
     async def test_duplicate_failure_error_prevents_false_admin_notification(self):
         self.client.get_lead.return_value = {
