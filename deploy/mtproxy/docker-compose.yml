@@ -1,0 +1,17 @@
+services:
+  mtproxy:
+    image: telegrammessenger/proxy@sha256:73210d43c8f8e4c888ba4e30d6daf7742528e9134252a1cd538caabf5e24a597
+    container_name: pravburo-mtproxy
+    restart: unless-stopped
+    ports:
+      - "8444:443/tcp"
+    volumes:
+      - mtproxy-data:/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"
+
+volumes:
+  mtproxy-data:
