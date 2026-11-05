@@ -38,6 +38,29 @@ async def close_http_client() -> None:
         await _shared_http_client.aclose()
     _shared_http_client = None
 
+
+def _operational_stage_named(stages: Iterable[dict[str, Any]], stage_name: str) -> dict[str, Any]:
+    """Resolve an exact stage name, preferring the single non-final pipeline stage.
+
+    Bitrix permits duplicate display names. PravBuro intentionally has both an
+    operational stage and a final failure stage named «Мусор», «Дубль», etc.
+    Button actions historically target the operational stage.
+    """
+    expected = stage_name.strip().casefold()
+    matches = [
+        stage for stage in stages
+        if str(stage.get("NAME", "")).strip().casefold() == expected
+    ]
+    if len(matches) == 1:
+        return matches[0]
+    operational = [
+        stage for stage in matches
+        if str(stage.get("SEMANTICS") or "").strip().upper() not in {"S", "F"}
+    ]
+    if len(operational) == 1:
+        return operational[0]
+    raise BitrixApiError(f"Не найдена однозначная рабочая стадия «{stage_name}» в CRM")
+
 # Поля, которые нужны для карточки лида. Явный список экономит трафик
 # и не тянет лишнее из CRM.
 LEAD_PREFERRED_CALL_TIME_FIELD = "UF_CRM_SELECTBOX"
@@ -429,10 +452,7 @@ class BitrixClient:
     async def _move_lead_to_stage_named(self, lead_id: str | int, stage_name: str) -> dict[str, Any]:
         """Resolve the actual CRM stage by name and verify that the update took effect."""
         stages = await self._call("crm.status.list", {"filter": {"ENTITY_ID": "STATUS"}})
-        matches = [stage for stage in stages if str(stage.get("NAME", "")).strip().casefold() == stage_name.casefold()]
-        if len(matches) != 1:
-            raise BitrixApiError(f"Не найдена однозначная стадия «{stage_name}» в CRM")
-        stage_id = str(matches[0]["STATUS_ID"])
+        stage_id = str(_operational_stage_named(stages, stage_name)["STATUS_ID"])
         await self.update_lead(lead_id, {"STATUS_ID": stage_id})
         lead = await self.get_lead(lead_id)
         if str(lead.get("STATUS_ID")) != stage_id:
@@ -692,10 +712,7 @@ class BitrixClient:
         category_id = str(deal.get("CATEGORY_ID", "0"))
         entity_id = "DEAL_STAGE" if category_id == "0" else f"DEAL_STAGE_{category_id}"
         stages = await self._call("crm.status.list", {"filter": {"ENTITY_ID": entity_id}})
-        matches = [stage for stage in stages if str(stage.get("NAME", "")).strip().casefold() == "мусор"]
-        if len(matches) != 1:
-            raise BitrixApiError("Не найдена однозначная стадия «Мусор» в воронке сделки")
-        stage_id = str(matches[0]["STATUS_ID"])
+        stage_id = str(_operational_stage_named(stages, "Мусор")["STATUS_ID"])
         await self.update_deal(deal_id, {"STAGE_ID": stage_id})
         deal = await self.get_deal(deal_id)
         if str(deal.get("STAGE_ID")) != stage_id:

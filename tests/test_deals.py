@@ -138,7 +138,10 @@ class DealJunkApiTests(unittest.IsolatedAsyncioTestCase):
         from apps.bot.backend.bitrix_client import BitrixClient
         client=BitrixClient(webhook_url='https://portal.test/rest/1/x/')
         client.get_deal=AsyncMock(side_effect=[{'ID':'1','CATEGORY_ID':'0','STAGE_ID':'NEW'},{'ID':'1','CATEGORY_ID':'0','STAGE_ID':final}])
-        client._call=AsyncMock(return_value=[{'STATUS_ID':'UC_K0Z3P6','NAME':'Мусор'}])
+        client._call=AsyncMock(return_value=[
+            {'STATUS_ID':'UC_K0Z3P6','NAME':'Мусор'},
+            {'STATUS_ID':'LOSE','NAME':'Мусор','SEMANTICS':'F'},
+        ])
         client.update_deal=AsyncMock()
         return client
 

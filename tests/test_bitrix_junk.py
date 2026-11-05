@@ -10,6 +10,7 @@ class JunkStageTests(unittest.IsolatedAsyncioTestCase):
         client._call = AsyncMock(return_value=[
             {'STATUS_ID': 'JUNK', 'NAME': 'Некачественный лид'},
             {'STATUS_ID': 'UC_NLD47X', 'NAME': 'Мусор'},
+            {'STATUS_ID': 'UC_JMY93G', 'NAME': 'Мусор', 'SEMANTICS': 'F'},
         ])
         client.update_lead = AsyncMock()
         client.get_lead = AsyncMock(return_value={'ID': '42', 'STATUS_ID': status})
@@ -33,6 +34,16 @@ class JunkStageTests(unittest.IsolatedAsyncioTestCase):
             await client.move_to_junk('42')
         client.update_lead.assert_not_awaited()
 
+    async def test_two_operational_stages_with_same_name_are_rejected(self):
+        client = self.client()
+        client._call.return_value = [
+            {'STATUS_ID': 'UC_ONE', 'NAME': 'Мусор'},
+            {'STATUS_ID': 'UC_TWO', 'NAME': 'Мусор'},
+        ]
+        with self.assertRaisesRegex(BitrixApiError, 'рабочая стадия'):
+            await client.move_to_junk('42')
+        client.update_lead.assert_not_awaited()
+
 
 class DuplicateStageTests(unittest.IsolatedAsyncioTestCase):
     def client(self, status='UC_DUP'):
@@ -40,6 +51,7 @@ class DuplicateStageTests(unittest.IsolatedAsyncioTestCase):
         client._call = AsyncMock(return_value=[
             {'STATUS_ID': 'UC_NLD47X', 'NAME': 'Мусор'},
             {'STATUS_ID': 'UC_DUP', 'NAME': 'Дубль'},
+            {'STATUS_ID': 'UC_DUP_FINAL', 'NAME': 'Дубль', 'SEMANTICS': 'F'},
         ])
         client.update_lead = AsyncMock()
         client.get_lead = AsyncMock(return_value={'ID': '42', 'STATUS_ID': status})
