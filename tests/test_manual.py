@@ -29,7 +29,14 @@ class ManualMainBotTests(unittest.IsolatedAsyncioTestCase):
         self.client.add_lead.return_value='42'
         self.client.get_lead.return_value={'ID':'42','PHONE':[{'VALUE':'+79990000000'}],'SOURCE_ID':'tg','ASSIGNED_BY_ID':'7'}
         self.client.get_user_name.return_value='Иван Иванов'
-        self.client.find_active_duplicate_lead.return_value=None
+        self.client.find_phone_duplicate_context.return_value={'leads': [], 'deals': []}
+        self.client.find_duplicate_origin_lead.return_value=None
+        self.client.get_lead_statuses.return_value=[
+            {'STATUS_ID': 'JUNK', 'NAME': 'Некачественный лид'},
+        ]
+        self.client.get_deal_stages.return_value=[
+            {'STATUS_ID': 'NEW', 'NAME': 'Новая'},
+        ]
         self.send=AsyncMock(side_effect=lambda text,**kwargs:{'message_id':100})
         async def queued_delivery(text, *, chat_id, reply_markup=None, idempotency_key):
             return await self.send(text, chat_id=chat_id, reply_markup=reply_markup)
@@ -200,7 +207,11 @@ class ManualMainBotTests(unittest.IsolatedAsyncioTestCase):
 
     async def test_duplicate_is_shown_after_optional_comment_step(self):
         row=await self.reach_comment()
-        self.client.find_active_duplicate_lead.return_value='999'
+        self.client.find_phone_duplicate_context.return_value={
+            'leads': [{'ID': '999', 'STATUS_ID': 'JUNK', 'ASSIGNED_BY_ID': '7'}],
+            'deals': [],
+        }
+        self.client.find_duplicate_origin_lead.return_value='999'
         await manual.handle_main_callback(self.callback(f'mskip:{row["id"]}'),4)
         saved=store.submission(row['id'])
         self.assertEqual(saved['state'],'duplicate')
@@ -208,17 +219,45 @@ class ManualMainBotTests(unittest.IsolatedAsyncioTestCase):
         self.client.add_lead.assert_not_awaited()
         text,keyboard=await manual.card(saved)
         self.assertIn('№999',text)
+        self.assertIn('Некачественный лид', text)
         self.assertIn('mforce:',keyboard['inline_keyboard'][0][0]['callback_data'])
 
     async def test_duplicate_can_be_force_created_with_assignment(self):
         row=await self.reach_comment()
-        self.client.find_active_duplicate_lead.return_value='999'
+        self.client.find_phone_duplicate_context.return_value={
+            'leads': [{'ID': '999', 'STATUS_ID': 'JUNK', 'ASSIGNED_BY_ID': '7'}],
+            'deals': [],
+        }
+        self.client.find_duplicate_origin_lead.return_value='999'
         await manual.handle_main_callback(self.callback(f'mskip:{row["id"]}'),4)
         await manual.handle_main_callback(self.callback(f'mforce:{row["id"]}'),5)
         self.assertEqual(store.submission(row['id'])['state'],'submitted')
         fields=self.client.add_lead.call_args.args[0]
         self.assertEqual(fields['ASSIGNED_BY_ID'],'7')
         self.assertIn('№999',fields['COMMENTS'])
+
+    async def test_deal_only_duplicate_is_shown_and_can_be_force_created(self):
+        row=await self.reach_comment()
+        self.client.find_phone_duplicate_context.return_value={
+            'leads': [],
+            'deals': [{
+                'ID': '501', 'CATEGORY_ID': '0', 'STAGE_ID': 'NEW',
+                'ASSIGNED_BY_ID': '7',
+            }],
+        }
+
+        await manual.handle_main_callback(self.callback(f'mskip:{row["id"]}'),4)
+
+        saved=store.submission(row['id'])
+        self.assertEqual(saved['state'], 'duplicate')
+        self.assertEqual(saved['duplicate_of'], 'deal:501')
+        text, keyboard = await manual.card(saved)
+        self.assertIn('Сделка №501', text)
+        self.assertIn('Новая', text)
+        self.assertIn('mforce:', keyboard['inline_keyboard'][0][0]['callback_data'])
+
+        await manual.handle_main_callback(self.callback(f'mforce:{row["id"]}'),5)
+        self.assertIn('сделкой №501', self.client.add_lead.call_args.args[0]['COMMENTS'])
 
 
 if __name__=='__main__':unittest.main()

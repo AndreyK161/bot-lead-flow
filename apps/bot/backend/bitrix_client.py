@@ -751,6 +751,44 @@ class BitrixClient:
         )
         return [str(x) for x in (result or {}).get("LEAD", [])]
 
+    async def find_duplicate_contact_ids(self, phones: list[str]) -> list[str]:
+        """Return Bitrix contacts that have one of the supplied phone numbers."""
+        values = [str(value) for value in phones if value]
+        if not values:
+            return []
+        result = await self._call(
+            "crm.duplicate.findbycomm",
+            {"entity_type": "CONTACT", "type": "PHONE", "values": values},
+        )
+        if isinstance(result, dict):
+            return [str(value) for value in (result.get("CONTACT") or [])]
+        return []
+
+    async def find_phone_duplicate_context(self, phones: list[str]) -> dict[str, list[dict[str, Any]]]:
+        """Resolve matching leads and every deal connected through a lead/contact."""
+        lead_ids = await self.find_duplicate_lead_ids(phones)
+        contact_ids = set(await self.find_duplicate_contact_ids(phones))
+        leads = await self.get_leads_by_ids(lead_ids)
+        contact_ids.update(
+            str(item.get("CONTACT_ID")) for item in leads
+            if item.get("CONTACT_ID") and str(item.get("CONTACT_ID")) != "0"
+        )
+
+        deals: list[dict[str, Any]] = []
+        if lead_ids:
+            deals.extend(await self.get_deals_by_lead_ids(lead_ids, category_id=None))
+        if contact_ids:
+            deals.extend(await self.get_deals_by_contact_ids(
+                list(contact_ids), category_id=None,
+            ))
+        unique_deals = {
+            str(item.get("ID")): item for item in deals if item.get("ID")
+        }
+        return {
+            "leads": leads,
+            "deals": list(unique_deals.values()),
+        }
+
     async def get_active_lead_ids(self, lead_ids: list[str]) -> list[str]:
         """Из списка ID лидов оставляет только те, что ещё в работе (не мусор/не конвертированы)."""
         if not lead_ids:

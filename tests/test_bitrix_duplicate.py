@@ -28,6 +28,30 @@ class DuplicateLeadTests(unittest.IsolatedAsyncioTestCase):
         )
         self.assertEqual(result, ['10', '20'])
 
+    async def test_phone_duplicate_context_includes_contact_and_lead_deals(self):
+        client = self.client()
+        client.find_duplicate_lead_ids = AsyncMock(return_value=['10'])
+        client.find_duplicate_contact_ids = AsyncMock(return_value=['30'])
+        client.get_leads_by_ids = AsyncMock(return_value=[
+            {'ID': '10', 'CONTACT_ID': '20'},
+        ])
+        client.get_deals_by_lead_ids = AsyncMock(return_value=[
+            {'ID': '100', 'LEAD_ID': '10'},
+        ])
+        client.get_deals_by_contact_ids = AsyncMock(return_value=[
+            {'ID': '100', 'CONTACT_ID': '20'},
+            {'ID': '101', 'CONTACT_ID': '30'},
+        ])
+
+        context = await client.find_phone_duplicate_context(['+79991234567'])
+
+        self.assertEqual([item['ID'] for item in context['leads']], ['10'])
+        self.assertEqual(
+            {item['ID'] for item in context['deals']}, {'100', '101'},
+        )
+        contact_ids = set(client.get_deals_by_contact_ids.call_args.args[0])
+        self.assertEqual(contact_ids, {'20', '30'})
+
     async def test_get_active_lead_ids_filters_by_semantic_status(self):
         client = self.client()
         client._call = AsyncMock(return_value=[

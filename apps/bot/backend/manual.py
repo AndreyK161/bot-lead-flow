@@ -94,6 +94,90 @@ def _base_card(row):
     return text
 
 
+def _duplicate_fallback_link(reference: str, portal: str) -> str:
+    if reference.startswith("deal:"):
+        entity_id = reference.split(":", 1)[1]
+        return (
+            f'Сделка <a href="https://{escape(portal)}/crm/deal/details/{escape(entity_id)}/">'
+            f'№{escape(entity_id)}</a>'
+        )
+    return (
+        f'Лид <a href="https://{escape(portal)}/crm/lead/details/{escape(reference)}/">'
+        f'№{escape(reference)}</a>'
+    )
+
+
+async def _duplicate_warning(row) -> str:
+    """Build a live Bitrix summary without storing CRM personal data locally."""
+    portal = urlparse(get_settings().bitrix_webhook_url).netloc
+    client = BitrixClient()
+    try:
+        context = await client.find_phone_duplicate_context([row["contact"]])
+        leads = sorted(
+            context["leads"], key=lambda item: int(item.get("ID") or 0), reverse=True,
+        )
+        deals = sorted(
+            context["deals"], key=lambda item: int(item.get("ID") or 0), reverse=True,
+        )
+        lead_statuses = {
+            str(item.get("STATUS_ID")): str(item.get("NAME") or item.get("STATUS_ID"))
+            for item in await client.get_lead_statuses()
+        } if leads else {}
+        deal_stage_maps: dict[str, dict[str, str]] = {}
+        for category_id in sorted({str(item.get("CATEGORY_ID") or "0") for item in deals}):
+            deal_stage_maps[category_id] = {
+                str(item.get("STATUS_ID")): str(item.get("NAME") or item.get("STATUS_ID"))
+                for item in await client.get_deal_stages(category_id)
+            }
+        user_ids = {
+            str(item.get("ASSIGNED_BY_ID")) for item in leads + deals
+            if item.get("ASSIGNED_BY_ID")
+        }
+        user_names = {
+            user_id: await client.get_user_name(user_id) or user_id
+            for user_id in user_ids
+        }
+    except Exception:
+        logger.exception("Failed to render manual duplicate context submission_id=%s", row["id"])
+        return (
+            "\n\n⚠️ Номер уже есть в Bitrix.\n"
+            + _duplicate_fallback_link(str(row["duplicate_of"]), portal)
+        )
+
+    lines = ["\n\n⚠️ <b>Номер уже есть в Bitrix</b>"]
+    if leads:
+        lines.append("\n<b>Лиды:</b>")
+        for lead in leads[:10]:
+            lead_id = str(lead.get("ID") or "")
+            status_name = lead_statuses.get(
+                str(lead.get("STATUS_ID") or ""), str(lead.get("STATUS_ID") or "Без стадии"),
+            )
+            manager = user_names.get(str(lead.get("ASSIGNED_BY_ID") or ""), "Без ответственного")
+            lines.append(
+                f'• <a href="https://{escape(portal)}/crm/lead/details/{escape(lead_id)}/">'
+                f'Лид №{escape(lead_id)}</a> — {escape(status_name)} · {escape(manager)}'
+            )
+        if len(leads) > 10:
+            lines.append(f"• ещё {len(leads) - 10}")
+    if deals:
+        lines.append("\n<b>Сделки:</b>")
+        for deal in deals[:10]:
+            deal_id = str(deal.get("ID") or "")
+            category_id = str(deal.get("CATEGORY_ID") or "0")
+            stage_name = deal_stage_maps.get(category_id, {}).get(
+                str(deal.get("STAGE_ID") or ""), str(deal.get("STAGE_ID") or "Без стадии"),
+            )
+            manager = user_names.get(str(deal.get("ASSIGNED_BY_ID") or ""), "Без ответственного")
+            lines.append(
+                f'• <a href="https://{escape(portal)}/crm/deal/details/{escape(deal_id)}/">'
+                f'Сделка №{escape(deal_id)}</a> — {escape(stage_name)} · {escape(manager)}'
+            )
+        if len(deals) > 10:
+            lines.append(f"• ещё {len(deals) - 10}")
+    lines.append("\nСоздать новый лид несмотря на совпадение?")
+    return "\n".join(lines)
+
+
 async def card(row):
     text = _base_card(row)
     state = row["state"]
@@ -121,9 +205,7 @@ async def card(row):
         text += "\n\nОтправьте комментарий следующим сообщением или нажмите «Пропустить»."
         keyboard = [[button("Пропустить", f"mskip:{row['id']}")], [button("✖️ Отменить", f"mc:{row['id']}")]]
     elif state == "duplicate":
-        portal = urlparse(get_settings().bitrix_webhook_url).netloc
-        text += (f'\n\n⚠️ Активный лид с этим телефоном уже существует: '
-                 f'<a href="https://{escape(portal)}/crm/lead/details/{row["duplicate_of"]}/">№{escape(row["duplicate_of"])}</a>')
+        text += await _duplicate_warning(row)
         keyboard = [[button("Всё равно создать", f"mforce:{row['id']}")], [button("✖️ Отменить", f"mc:{row['id']}")]]
     elif state == "creating":
         text += "\n\n⏳ Создаём лид в Битриксе…"
@@ -203,7 +285,11 @@ async def _create(row, telegram_user_id):
     if row.get("comment"):
         comments += f"\n\n{row['comment']}"
     if row.get("duplicate_of"):
-        comments += f"\n\nСоздано вручную несмотря на совпадение с активным лидом №{row['duplicate_of']}"
+        reference = str(row["duplicate_of"])
+        if reference.startswith("deal:"):
+            comments += f"\n\nСоздано вручную несмотря на совпадение со сделкой №{reference.split(':', 1)[1]}"
+        else:
+            comments += f"\n\nСоздано вручную несмотря на совпадение с лидом №{reference}"
     fields = {
         "TITLE": f"Лид {row['source_name']}", "SOURCE_ID": row["source_id"],
         "SOURCE_DESCRIPTION": MARKER + row["id"], "COMMENTS": comments,
@@ -254,11 +340,21 @@ async def _create(row, telegram_user_id):
 
 async def _finish(row, telegram_user_id, *, force=False):
     if not force:
-        duplicate_id = await BitrixClient().find_active_duplicate_lead(
-            [row["contact"]],
-            extra_candidate_ids=store.find_all_seen_lead_ids_by_phones([row["contact"]]),
-        )
-        if duplicate_id:
+        client = BitrixClient()
+        context = await client.find_phone_duplicate_context([row["contact"]])
+        if context["leads"] or context["deals"]:
+            duplicate_id = await client.find_duplicate_origin_lead(
+                [row["contact"]],
+                extra_candidate_ids=store.find_all_seen_lead_ids_by_phones([row["contact"]]),
+            )
+            if not duplicate_id and context["leads"]:
+                duplicate_id = str(min(
+                    context["leads"], key=lambda item: int(item.get("ID") or 0),
+                )["ID"])
+            if not duplicate_id:
+                duplicate_id = "deal:" + str(min(
+                    context["deals"], key=lambda item: int(item.get("ID") or 0),
+                )["ID"])
             store.save(row["id"], state="duplicate", duplicate_of=duplicate_id, dirty=1)
             await sync(store.submission(row["id"]))
             return
