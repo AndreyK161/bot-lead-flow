@@ -82,6 +82,9 @@ def telegram_chat_id() -> str:
     explicit = os.environ.get("LEADFLOW_MONITOR_CHAT_ID", "").strip()
     if explicit:
         return explicit
+    system_recipient = dotenv_value("SYSTEM_NOTIFICATION_CHAT_ID").strip()
+    if system_recipient:
+        return system_recipient
     super_admin = dotenv_value("SUPER_ADMIN_USERS").split(",", 1)[0].strip()
     return super_admin or dotenv_value("MODE_SWITCH_USER_ID").strip()
 

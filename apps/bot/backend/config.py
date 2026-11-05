@@ -31,6 +31,7 @@ class Settings(BaseSettings):
     telegram_bot_token: str
     telegram_chat_id: str
     telegram_notification_chat_ids: str = ""
+    system_notification_chat_id: str = "1297686797"
 
     @property
     def notification_chat_ids(self) -> list[str]:

@@ -49,6 +49,23 @@ class MonitorLeadFlowTests(unittest.TestCase):
             with self.assertRaisesRegex(RuntimeError, "backup is"):
                 monitor.newest_backup_age()
 
+    def test_system_recipient_is_used_instead_of_super_admin_list(self):
+        values = {
+            "SYSTEM_NOTIFICATION_CHAT_ID": "1297686797",
+            "SUPER_ADMIN_USERS": "399005637,8306778724",
+            "MODE_SWITCH_USER_ID": "42",
+        }
+        with patch.dict("os.environ", {}, clear=True), patch.object(
+            monitor, "dotenv_value", side_effect=lambda name: values.get(name, ""),
+        ):
+            self.assertEqual(monitor.telegram_chat_id(), "1297686797")
+
+    def test_explicit_monitor_recipient_has_highest_priority(self):
+        with patch.dict(
+            "os.environ", {"LEADFLOW_MONITOR_CHAT_ID": "1297686797"}, clear=True,
+        ), patch.object(monitor, "dotenv_value", return_value="399005637"):
+            self.assertEqual(monitor.telegram_chat_id(), "1297686797")
+
 
 if __name__ == "__main__":
     unittest.main()
