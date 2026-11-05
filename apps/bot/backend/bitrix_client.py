@@ -102,8 +102,12 @@ DEAL_SELECT_FIELDS = [
 
 class BitrixClient:
     def __init__(self, webhook_url: str | None = None) -> None:
-        base = webhook_url or get_settings().bitrix_webhook_url
+        settings = get_settings() if webhook_url is None else None
+        base = webhook_url or settings.bitrix_webhook_url
         self._base_url = base.rstrip("/") + "/"
+        self._lead_failure_reason_field = str(
+            getattr(settings, "lead_failure_reason_field", "UF_CRM_1793868330863")
+        )
 
     async def _call(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         payload = await self._call_payload(method, params)
@@ -146,7 +150,10 @@ class BitrixClient:
             start = int(payload["next"])
 
     async def get_lead(self, lead_id: str | int) -> dict[str, Any]:
-        return await self._call("crm.lead.get", {"id": lead_id, "select": LEAD_SELECT_FIELDS})
+        select = list(dict.fromkeys(LEAD_SELECT_FIELDS + [
+            self._lead_failure_reason_field,
+        ]))
+        return await self._call("crm.lead.get", {"id": lead_id, "select": select})
 
     async def get_source_name(self, source_id: str) -> str | None:
         """Резолвит SOURCE_ID лида в человекочитаемое имя через справочник статусов."""
@@ -465,6 +472,60 @@ class BitrixClient:
     async def move_to_duplicate_stage(self, lead_id: str | int) -> dict[str, Any]:
         return await self._move_lead_to_stage_named(lead_id, "Дубль")
 
+    async def fail_duplicate_lead(self, lead_id: str | int) -> dict[str, Any]:
+        """Move a duplicate to the common failed stage and persist its reason."""
+        settings = get_settings()
+        failed_status_id = str(getattr(settings, "lead_failed_status_id", "JUNK"))
+        reason_field = str(getattr(
+            settings, "lead_failure_reason_field", "UF_CRM_1793868330863",
+        ))
+        reason_name = str(getattr(settings, "lead_duplicate_reason_name", "Дубль"))
+
+        statuses = await self.get_lead_statuses()
+        failed_status = next(
+            (item for item in statuses if str(item.get("STATUS_ID") or "") == failed_status_id),
+            None,
+        )
+        if not failed_status or str(failed_status.get("SEMANTICS") or "").upper() != "F":
+            raise BitrixApiError(
+                f"Стадия провала лида {failed_status_id} отсутствует или не является финальной",
+            )
+
+        userfields = await self._call_all(
+            "crm.lead.userfield.list", {"order": {"ID": "ASC"}, "filter": {}},
+        )
+        field = next(
+            (item for item in userfields if str(item.get("FIELD_NAME") or "") == reason_field),
+            None,
+        )
+        if not field:
+            raise BitrixApiError(f"Поле причины провала лида {reason_field} не найдено")
+        reason = next(
+            (
+                item for item in (field.get("LIST") or [])
+                if str(item.get("VALUE") or "").strip().casefold()
+                == reason_name.strip().casefold()
+            ),
+            None,
+        )
+        if not reason or not reason.get("ID"):
+            raise BitrixApiError(f"Причина провала «{reason_name}» не найдена")
+        reason_id = str(reason["ID"])
+
+        await self.update_lead(lead_id, {
+            "STATUS_ID": failed_status_id,
+            reason_field: reason_id,
+        })
+        lead = await self.get_lead(lead_id)
+        if (
+            str(lead.get("STATUS_ID") or "") != failed_status_id
+            or str(lead.get(reason_field) or "") != reason_id
+        ):
+            raise BitrixApiError(
+                f"Битрикс не подтвердил провал лида с причиной «{reason_name}»",
+            )
+        return lead
+
     async def add_lead(self, fields: dict[str, Any]) -> str:
         return str(await self._call("crm.lead.add", {"fields": fields}))
 
@@ -538,7 +599,12 @@ class BitrixClient:
         return result
 
     async def get_leads_by_ids(self, lead_ids: list[str]) -> list[dict[str, Any]]:
-        return await self._get_by_ids("crm.lead.list", lead_ids, LEAD_SELECT_FIELDS)
+        return await self._get_by_ids(
+            "crm.lead.list", lead_ids,
+            list(dict.fromkeys(LEAD_SELECT_FIELDS + [
+                "STATUS_SEMANTIC_ID", self._lead_failure_reason_field,
+            ])),
+        )
 
     async def get_deals_by_ids(
         self, deal_ids: list[str], *, select: list[str] | None = None,
@@ -706,6 +772,45 @@ class BitrixClient:
             candidates.discard(str(exclude_lead_id))
         active = await self.get_active_lead_ids(list(candidates))
         return str(max(int(c) for c in active)) if active else None
+
+    async def find_duplicate_origin_lead(
+        self,
+        phones: list[str],
+        *,
+        exclude_lead_id: str | int | None = None,
+        extra_candidate_ids: list[str] | None = None,
+    ) -> str | None:
+        """Find the earliest genuine working/converted lead for a repeat request.
+
+        Converted leads remain relevant because their manager usually owns the
+        resulting deal. Legacy leads already placed on a stage named «Дубль»
+        must never become the canonical origin of another duplicate.
+        """
+        candidates = set(await self.find_duplicate_lead_ids(phones))
+        candidates.update(str(item) for item in (extra_candidate_ids or []))
+        if exclude_lead_id is not None:
+            candidates.discard(str(exclude_lead_id))
+        if not candidates:
+            return None
+
+        leads = await self.get_leads_by_ids(list(candidates))
+        statuses = await self.get_lead_statuses()
+        duplicate_status_ids = {
+            str(item.get("STATUS_ID") or "")
+            for item in statuses
+            if str(item.get("NAME") or "").strip().casefold() == "дубль"
+        }
+        relevant = [
+            item for item in leads
+            if str(item.get("STATUS_SEMANTIC_ID") or "") in {"P", "S"}
+            and str(item.get("STATUS_ID") or "") not in duplicate_status_ids
+        ]
+        if not relevant:
+            return None
+        # The first genuine request is the origin, whether it is still active
+        # or has already been converted into a deal.
+        original = min(relevant, key=lambda item: int(item.get("ID") or 0))
+        return str(original["ID"])
 
     async def move_deal_to_junk(self, deal_id: str | int) -> dict[str, Any]:
         deal = await self.get_deal(deal_id)

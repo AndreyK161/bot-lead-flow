@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from unittest.mock import AsyncMock, patch
 
 from apps.bot.backend import store
-from apps.bot.backend.bitrix_client import BitrixClient
+from apps.bot.backend.bitrix_client import BitrixApiError, BitrixClient
 
 
 class DuplicateLeadTests(unittest.IsolatedAsyncioTestCase):
@@ -46,6 +46,103 @@ class DuplicateLeadTests(unittest.IsolatedAsyncioTestCase):
         (queried,), _ = client.get_active_lead_ids.call_args
         self.assertEqual(sorted(queried), ['5', '9'])
         self.assertEqual(result, '9')
+
+    async def test_origin_prefers_earliest_active_and_excludes_legacy_duplicates(self):
+        client = self.client()
+        client.find_duplicate_lead_ids = AsyncMock(return_value=['9', '5', '7'])
+        client.get_leads_by_ids = AsyncMock(return_value=[
+            {'ID': '9', 'STATUS_ID': 'IN_PROCESS', 'STATUS_SEMANTIC_ID': 'P'},
+            {'ID': '5', 'STATUS_ID': 'IN_PROCESS', 'STATUS_SEMANTIC_ID': 'P'},
+            {'ID': '7', 'STATUS_ID': 'UC_DUP', 'STATUS_SEMANTIC_ID': 'P'},
+        ])
+        client.get_lead_statuses = AsyncMock(return_value=[
+            {'STATUS_ID': 'IN_PROCESS', 'NAME': 'В работе'},
+            {'STATUS_ID': 'UC_DUP', 'NAME': 'Дубль'},
+        ])
+
+        result = await client.find_duplicate_origin_lead(
+            ['+79991234567'], exclude_lead_id='10',
+        )
+
+        self.assertEqual(result, '5')
+
+    async def test_converted_origin_is_kept_for_related_deal_notification(self):
+        client = self.client()
+        client.find_duplicate_lead_ids = AsyncMock(return_value=['5'])
+        client.get_leads_by_ids = AsyncMock(return_value=[
+            {'ID': '5', 'STATUS_ID': 'CONVERTED', 'STATUS_SEMANTIC_ID': 'S'},
+        ])
+        client.get_lead_statuses = AsyncMock(return_value=[
+            {'STATUS_ID': 'CONVERTED', 'NAME': 'Качественный лид'},
+        ])
+
+        result = await client.find_duplicate_origin_lead(['+79991234567'])
+
+        self.assertEqual(result, '5')
+
+    async def test_origin_is_earliest_even_when_it_is_converted(self):
+        client = self.client()
+        client.find_duplicate_lead_ids = AsyncMock(return_value=['9', '5'])
+        client.get_leads_by_ids = AsyncMock(return_value=[
+            {'ID': '9', 'STATUS_ID': 'IN_PROCESS', 'STATUS_SEMANTIC_ID': 'P'},
+            {'ID': '5', 'STATUS_ID': 'CONVERTED', 'STATUS_SEMANTIC_ID': 'S'},
+        ])
+        client.get_lead_statuses = AsyncMock(return_value=[])
+
+        result = await client.find_duplicate_origin_lead(['+79991234567'])
+
+        self.assertEqual(result, '5')
+
+    async def test_duplicate_is_failed_with_reason_from_bitrix_enumeration(self):
+        client = self.client()
+        settings = SimpleNamespace(
+            lead_failed_status_id='JUNK',
+            lead_failure_reason_field='UF_REASON',
+            lead_duplicate_reason_name='Дубль',
+        )
+        client.get_lead_statuses = AsyncMock(return_value=[
+            {'STATUS_ID': 'NEW', 'NAME': 'Не обработан'},
+            {'STATUS_ID': 'JUNK', 'NAME': 'Некачественный лид', 'SEMANTICS': 'F'},
+        ])
+        client._call_all = AsyncMock(return_value=[{
+            'FIELD_NAME': 'UF_REASON',
+            'LIST': [
+                {'ID': '1', 'VALUE': 'Мусор'},
+                {'ID': '2118', 'VALUE': 'Дубль'},
+            ],
+        }])
+        client.update_lead = AsyncMock()
+        client.get_lead = AsyncMock(return_value={
+            'ID': '42', 'STATUS_ID': 'JUNK', 'UF_REASON': '2118',
+        })
+
+        with patch('apps.bot.backend.bitrix_client.get_settings', return_value=settings):
+            lead = await client.fail_duplicate_lead('42')
+
+        client.update_lead.assert_awaited_once_with('42', {
+            'STATUS_ID': 'JUNK', 'UF_REASON': '2118',
+        })
+        self.assertEqual(lead['UF_REASON'], '2118')
+
+    async def test_duplicate_failure_requires_configured_reason(self):
+        client = self.client()
+        settings = SimpleNamespace(
+            lead_failed_status_id='JUNK',
+            lead_failure_reason_field='UF_REASON',
+            lead_duplicate_reason_name='Дубль',
+        )
+        client.get_lead_statuses = AsyncMock(return_value=[
+            {'STATUS_ID': 'JUNK', 'SEMANTICS': 'F'},
+        ])
+        client._call_all = AsyncMock(return_value=[{
+            'FIELD_NAME': 'UF_REASON', 'LIST': [{'ID': '1', 'VALUE': 'Мусор'}],
+        }])
+        client.update_lead = AsyncMock()
+
+        with patch('apps.bot.backend.bitrix_client.get_settings', return_value=settings):
+            with self.assertRaisesRegex(BitrixApiError, 'Дубль'):
+                await client.fail_duplicate_lead('42')
+        client.update_lead.assert_not_awaited()
 
     async def test_find_active_duplicate_lead_returns_none_without_active_matches(self):
         client = self.client()

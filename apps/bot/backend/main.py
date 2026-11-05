@@ -7,6 +7,7 @@ import hashlib
 import logging
 from contextlib import asynccontextmanager, suppress
 from datetime import datetime, timezone
+from html import escape
 from urllib.parse import urlparse
 
 from fastapi import FastAPI, HTTPException, Request, status
@@ -218,7 +219,7 @@ async def _process_bitrix_event(event: str, entity_id: str | None) -> dict[str, 
         duplicate_of_lead_id = None
         phones = [(item or {}).get("VALUE") for item in (lead.get("PHONE") or [])]
         if phones:
-            duplicate_of_lead_id = await client.find_active_duplicate_lead(
+            duplicate_of_lead_id = await client.find_duplicate_origin_lead(
                 phones,
                 exclude_lead_id=lead_id,
                 extra_candidate_ids=store.find_all_seen_lead_ids_by_phones(phones),
@@ -229,10 +230,20 @@ async def _process_bitrix_event(event: str, entity_id: str | None) -> dict[str, 
 
     if duplicate_of_lead_id:
         try:
-            lead = await client.move_to_duplicate_stage(lead_id)
+            lead = await client.fail_duplicate_lead(lead_id)
             await stats.observe("lead", lead, client)
         except BitrixApiError:
-            logger.exception("Failed to auto-move duplicate lead_id=%s to «Дубль»", lead_id)
+            logger.exception(
+                "Failed to mark duplicate lead_id=%s as failed with reason «Дубль»",
+                lead_id,
+            )
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Bitrix duplicate failure update error",
+            )
+        await _notify_original_owner_of_duplicate(
+            client, settings, lead, duplicate_of_lead_id,
+        )
 
     message = build_lead_notification(
         lead,
@@ -334,6 +345,66 @@ async def _notify_assigned_manager(client: BitrixClient, settings, lead_id: str,
             await send_telegram_message(text, chat_id=manager_chat_id)
         except Exception:
             logger.exception("Failed to notify manager telegram_id=%s about lead_id=%s", manager_chat_id, lead_id)
+
+
+async def _notify_original_owner_of_duplicate(
+    client: BitrixClient, settings, duplicate_lead: dict, original_lead_id: str,
+) -> None:
+    """Warn the manager responsible for the original lead/deal about a repeat request."""
+    try:
+        original_lead = await client.get_lead(original_lead_id)
+        deals_for_lead = await client.get_deals_by_lead_ids([str(original_lead_id)])
+        if not deals_for_lead and original_lead.get("CONTACT_ID"):
+            deals_for_lead = await client.get_deals_by_contact_ids([
+                str(original_lead["CONTACT_ID"]),
+            ])
+        original_deal = max(
+            deals_for_lead,
+            key=lambda item: int(item.get("ID") or 0),
+            default=None,
+        )
+        owner_id = str(
+            (original_deal or {}).get("ASSIGNED_BY_ID")
+            or original_lead.get("ASSIGNED_BY_ID")
+            or ""
+        )
+        manager_chat_ids = store.manager_telegram_ids(owner_id)
+        if not manager_chat_ids:
+            return
+
+        portal = _portal_domain(settings.bitrix_webhook_url)
+        duplicate_id = str(duplicate_lead.get("ID") or "")
+        duplicate_url = f"https://{portal}/crm/lead/details/{duplicate_id}/"
+        if original_deal:
+            original_id = str(original_deal.get("ID") or "")
+            original_url = f"https://{portal}/crm/deal/details/{original_id}/"
+            original_label = "исходной сделкой"
+        else:
+            original_id = str(original_lead_id)
+            original_url = f"https://{portal}/crm/lead/details/{original_id}/"
+            original_label = "исходным лидом"
+        text = (
+            "⚠️ <b>Повторное обращение вашего клиента</b>\n\n"
+            f'Новый <a href="{escape(duplicate_url)}">лид №{escape(duplicate_id)}</a> '
+            "автоматически провален с причиной «Дубль».\n"
+            f'Он совпал с {original_label} '
+            f'<a href="{escape(original_url)}">№{escape(original_id)}</a>.\n\n'
+            "Обратите внимание на клиента и при необходимости свяжитесь с ним."
+        )
+    except Exception:
+        logger.exception(
+            "Failed to prepare original owner notification duplicate_lead_id=%s original_lead_id=%s",
+            duplicate_lead.get("ID"), original_lead_id,
+        )
+        return
+    for manager_chat_id in manager_chat_ids:
+        try:
+            await send_telegram_message(text, chat_id=manager_chat_id)
+        except Exception:
+            logger.exception(
+                "Failed to notify original owner telegram_id=%s duplicate_lead_id=%s",
+                manager_chat_id, duplicate_lead.get("ID"),
+            )
 
 
 async def _handle_message(message: dict, settings, update_id: int) -> None:

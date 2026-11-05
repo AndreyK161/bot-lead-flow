@@ -43,6 +43,9 @@ class WebhookTestCase(unittest.IsolatedAsyncioTestCase):
         self.client.get_source_name.return_value = 'Сайт'
         self.client.get_user_name.return_value = 'Никита Продажников'
         self.client.get_department_users.return_value = [{'ID': '460', 'NAME': 'Никита', 'LAST_NAME': 'Продажников'}]
+        self.client.get_deals_by_lead_ids.return_value = []
+        self.client.get_deals_by_contact_ids.return_value = []
+        self.client.find_duplicate_origin_lead.return_value = None
         self.bitrix_patch = patch('apps.bot.backend.main.BitrixClient', return_value=self.client)
         self.bitrix_patch.start()
 
@@ -203,34 +206,36 @@ class BitrixWebhookTests(WebhookTestCase):
             'ID': '20312', 'NAME': 'Клиент', 'SOURCE_ID': 'WEB', 'ASSIGNED_BY_ID': '',
             'PHONE': [{'VALUE': '+79991234567', 'VALUE_TYPE': 'WORK'}],
         }
-        self.client.find_active_duplicate_lead.return_value = '999'
-        self.client.move_to_duplicate_stage.return_value = {
-            'ID': '20312', 'NAME': 'Клиент', 'SOURCE_ID': 'WEB', 'STATUS_ID': 'UC_DUP',
+        self.client.find_duplicate_origin_lead.return_value = '999'
+        self.client.fail_duplicate_lead.return_value = {
+            'ID': '20312', 'NAME': 'Клиент', 'SOURCE_ID': 'WEB', 'STATUS_ID': 'JUNK',
+            'UF_CRM_1793868330863': '2118',
             'PHONE': [{'VALUE': '+79991234567', 'VALUE_TYPE': 'WORK'}],
         }
         request = form_request(**{'auth[application_token]': 'apptoken', 'event': 'ONCRMLEADADD', 'data[FIELDS][ID]': '20312'})
         result = await main.bitrix_webhook(request)
         self.assertEqual(result, {'status': 'ok'})
-        call = self.client.find_active_duplicate_lead.call_args
+        call = self.client.find_duplicate_origin_lead.call_args
         self.assertEqual(call.args, (['+79991234567'],))
         self.assertEqual(call.kwargs['exclude_lead_id'], '20312')
-        self.client.move_to_duplicate_stage.assert_awaited_once_with('20312')
+        self.client.fail_duplicate_lead.assert_awaited_once_with('20312')
         self.client.move_to_junk.assert_not_awaited()
         text = self.send_message.call_args.args[0]
         self.assertIn('Дубликат', text)
         self.assertIn('Дубль', text)
         self.assertIn('№999', text)
+        self.assertIn('автоматически провален', text.casefold())
 
     async def test_non_duplicate_lead_is_not_moved(self):
         self.client.get_lead.return_value = {
             'ID': '20312', 'NAME': 'Клиент', 'SOURCE_ID': 'WEB', 'ASSIGNED_BY_ID': '',
             'PHONE': [{'VALUE': '+79991234567', 'VALUE_TYPE': 'WORK'}],
         }
-        self.client.find_active_duplicate_lead.return_value = None
+        self.client.find_duplicate_origin_lead.return_value = None
         request = form_request(**{'auth[application_token]': 'apptoken', 'event': 'ONCRMLEADADD', 'data[FIELDS][ID]': '20312'})
         result = await main.bitrix_webhook(request)
         self.assertEqual(result, {'status': 'ok'})
-        self.client.move_to_duplicate_stage.assert_not_awaited()
+        self.client.fail_duplicate_lead.assert_not_awaited()
         text = self.send_message.call_args.args[0]
         self.assertNotIn('Дубликат', text)
 
@@ -238,7 +243,64 @@ class BitrixWebhookTests(WebhookTestCase):
         self.client.get_lead.return_value = {'ID': '20312', 'NAME': 'Клиент', 'SOURCE_ID': 'WEB', 'ASSIGNED_BY_ID': ''}
         request = form_request(**{'auth[application_token]': 'apptoken', 'event': 'ONCRMLEADADD', 'data[FIELDS][ID]': '20312'})
         await main.bitrix_webhook(request)
-        self.client.find_active_duplicate_lead.assert_not_awaited()
+        self.client.find_duplicate_origin_lead.assert_not_awaited()
+
+    async def test_original_deal_manager_is_warned_about_duplicate(self):
+        store.link_manager('460', 'Никита Продажников', 777)
+        self.client.get_lead.return_value = {
+            'ID': '999', 'ASSIGNED_BY_ID': '110',
+        }
+        self.client.get_deals_by_lead_ids.return_value = [{
+            'ID': '500', 'LEAD_ID': '999', 'ASSIGNED_BY_ID': '460',
+        }]
+
+        await main._notify_original_owner_of_duplicate(
+            self.client, self.settings, {'ID': '20312'}, '999',
+        )
+
+        self.send_message.assert_awaited_once()
+        self.assertEqual(self.send_message.call_args.kwargs['chat_id'], 777)
+        text = self.send_message.call_args.args[0]
+        self.assertIn('Повторное обращение', text)
+        self.assertIn('/crm/lead/details/20312/', text)
+        self.assertIn('/crm/deal/details/500/', text)
+
+    async def test_original_contact_deal_manager_is_warned_when_lead_link_is_missing(self):
+        store.link_manager('460', 'Никита Продажников', 777)
+        self.client.get_lead.return_value = {
+            'ID': '999', 'CONTACT_ID': '88', 'ASSIGNED_BY_ID': '110',
+        }
+        self.client.get_deals_by_lead_ids.return_value = []
+        self.client.get_deals_by_contact_ids.return_value = [{
+            'ID': '501', 'CONTACT_ID': '88', 'ASSIGNED_BY_ID': '460',
+        }]
+
+        await main._notify_original_owner_of_duplicate(
+            self.client, self.settings, {'ID': '20312'}, '999',
+        )
+
+        self.client.get_deals_by_contact_ids.assert_awaited_once_with(['88'])
+        self.assertEqual(self.send_message.call_args.kwargs['chat_id'], 777)
+        self.assertIn('/crm/deal/details/501/', self.send_message.call_args.args[0])
+
+    async def test_duplicate_failure_error_prevents_false_admin_notification(self):
+        self.client.get_lead.return_value = {
+            'ID': '20312', 'SOURCE_ID': 'WEB',
+            'PHONE': [{'VALUE': '+79991234567'}],
+        }
+        self.client.find_duplicate_origin_lead.return_value = '999'
+        self.client.fail_duplicate_lead.side_effect = BitrixApiError('field missing')
+        request = form_request(**{
+            'auth[application_token]': 'apptoken',
+            'event': 'ONCRMLEADADD',
+            'data[FIELDS][ID]': '20312',
+        })
+
+        with self.assertRaises(Exception) as ctx:
+            await main.bitrix_webhook(request)
+
+        self.assertEqual(ctx.exception.status_code, 502)
+        self.send_message.assert_not_awaited()
 
 
 class TelegramWebhookAuthTests(WebhookTestCase):
