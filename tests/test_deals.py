@@ -138,24 +138,38 @@ class DealTrackingTests(unittest.IsolatedAsyncioTestCase):
 
 
 class DealJunkApiTests(unittest.IsolatedAsyncioTestCase):
-    def client(self,final='UC_K0Z3P6'):
+    def client(self,final='LOSE', reason='2104'):
         from apps.bot.backend.bitrix_client import BitrixClient
         client=BitrixClient(webhook_url='https://portal.test/rest/1/x/')
-        client.get_deal=AsyncMock(side_effect=[{'ID':'1','CATEGORY_ID':'0','STAGE_ID':'NEW'},{'ID':'1','CATEGORY_ID':'0','STAGE_ID':final}])
-        client._call=AsyncMock(return_value=[
-            {'STATUS_ID':'UC_K0Z3P6','NAME':'Мусор'},
-            {'STATUS_ID':'LOSE','NAME':'Мусор','SEMANTICS':'F'},
+        client.get_deal=AsyncMock(side_effect=[
+            {'ID':'1','CATEGORY_ID':'0','STAGE_ID':'NEW'},
+            {'ID':'1','CATEGORY_ID':'0','STAGE_ID':final,'UF_CRM_REFUSAL_REASON_OP':reason},
         ])
+        client._call=AsyncMock(return_value=[
+            {'STATUS_ID':'NEW','NAME':'Не обработан'},
+            {'STATUS_ID':'LOSE','NAME':'Сделка провалена','SEMANTICS':'F'},
+        ])
+        client.get_deal_userfields=AsyncMock(return_value=[{
+            'FIELD_NAME':'UF_CRM_REFUSAL_REASON_OP',
+            'LIST':[{'ID':'2104','VALUE':'Мусор'}],
+        }])
         client.update_deal=AsyncMock()
         return client
 
     async def test_moves_and_verifies_deal(self):
         client=self.client()
         result=await client.move_deal_to_junk('1')
-        client.update_deal.assert_awaited_once_with('1',{'STAGE_ID':'UC_K0Z3P6'})
-        self.assertEqual(result['STAGE_ID'],'UC_K0Z3P6')
+        client.update_deal.assert_awaited_once_with('1',{
+            'STAGE_ID':'LOSE','UF_CRM_REFUSAL_REASON_OP':'2104',
+        })
+        self.assertEqual(result['STAGE_ID'],'LOSE')
 
     async def test_does_not_report_silent_failure(self):
         client=self.client(final='NEW')
+        with self.assertRaises(BitrixApiError):
+            await client.move_deal_to_junk('1')
+
+    async def test_does_not_report_silent_reason_failure(self):
+        client=self.client(reason='')
         with self.assertRaises(BitrixApiError):
             await client.move_deal_to_junk('1')

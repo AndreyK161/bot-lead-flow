@@ -108,6 +108,9 @@ class BitrixClient:
         self._lead_failure_reason_field = str(
             getattr(settings, "lead_failure_reason_field", "UF_CRM_1793868330863")
         )
+        self._deal_refusal_reason_field = str(
+            getattr(settings, "deal_refusal_reason_field", "UF_CRM_REFUSAL_REASON_OP")
+        )
 
     async def _call(self, method: str, params: dict[str, Any] | None = None) -> dict[str, Any]:
         payload = await self._call_payload(method, params)
@@ -467,7 +470,11 @@ class BitrixClient:
         return lead
 
     async def move_to_junk(self, lead_id: str | int) -> dict[str, Any]:
-        return await self._move_lead_to_stage_named(lead_id, "Мусор")
+        settings = get_settings()
+        return await self._fail_lead(
+            lead_id,
+            str(getattr(settings, "lead_junk_reason_name", "Мусор")),
+        )
 
     async def move_to_duplicate_stage(self, lead_id: str | int) -> dict[str, Any]:
         return await self._move_lead_to_stage_named(lead_id, "Дубль")
@@ -475,11 +482,18 @@ class BitrixClient:
     async def fail_duplicate_lead(self, lead_id: str | int) -> dict[str, Any]:
         """Move a duplicate to the common failed stage and persist its reason."""
         settings = get_settings()
+        return await self._fail_lead(
+            lead_id,
+            str(getattr(settings, "lead_duplicate_reason_name", "Дубль")),
+        )
+
+    async def _fail_lead(self, lead_id: str | int, reason_name: str) -> dict[str, Any]:
+        """Move a lead to the common failed stage with a verified failure reason."""
+        settings = get_settings()
         failed_status_id = str(getattr(settings, "lead_failed_status_id", "JUNK"))
         reason_field = str(getattr(
             settings, "lead_failure_reason_field", "UF_CRM_1793868330863",
         ))
-        reason_name = str(getattr(settings, "lead_duplicate_reason_name", "Дубль"))
 
         statuses = await self.get_lead_statuses()
         failed_status = next(
@@ -866,11 +880,47 @@ class BitrixClient:
         category_id = str(deal.get("CATEGORY_ID", "0"))
         entity_id = "DEAL_STAGE" if category_id == "0" else f"DEAL_STAGE_{category_id}"
         stages = await self._call("crm.status.list", {"filter": {"ENTITY_ID": entity_id}})
-        stage_id = str(_operational_stage_named(stages, "Мусор")["STATUS_ID"])
-        await self.update_deal(deal_id, {"STAGE_ID": stage_id})
+        failed_stages = [
+            item for item in stages
+            if str(item.get("SEMANTICS") or "").strip().upper() == "F"
+        ]
+        if len(failed_stages) != 1:
+            raise BitrixApiError(
+                f"Не найдена однозначная финальная стадия сделки в воронке {category_id}",
+            )
+        stage_id = str(failed_stages[0]["STATUS_ID"])
+
+        reason_field = self._deal_refusal_reason_field
+        userfields = await self.get_deal_userfields()
+        field = next(
+            (item for item in userfields if str(item.get("FIELD_NAME") or "") == reason_field),
+            None,
+        )
+        if not field:
+            raise BitrixApiError(f"Поле причины провала сделки {reason_field} не найдено")
+        reason = next(
+            (
+                item for item in (field.get("LIST") or [])
+                if str(item.get("VALUE") or "").strip().casefold() == "мусор"
+            ),
+            None,
+        )
+        if not reason or not reason.get("ID"):
+            raise BitrixApiError("Причина провала сделки «Мусор» не найдена")
+        reason_id = str(reason["ID"])
+
+        await self.update_deal(deal_id, {
+            "STAGE_ID": stage_id,
+            reason_field: reason_id,
+        })
         deal = await self.get_deal(deal_id)
-        if str(deal.get("STAGE_ID")) != stage_id:
-            raise BitrixApiError("Битрикс не подтвердил перенос сделки на стадию «Мусор»")
+        if (
+            str(deal.get("STAGE_ID") or "") != stage_id
+            or str(deal.get(reason_field) or "") != reason_id
+        ):
+            raise BitrixApiError(
+                "Битрикс не подтвердил провал сделки с причиной «Мусор»",
+            )
         return deal
 
 

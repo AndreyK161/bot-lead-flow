@@ -1,47 +1,69 @@
 import unittest
 from unittest.mock import AsyncMock
+from unittest.mock import patch
+from types import SimpleNamespace
 
 from apps.bot.backend.bitrix_client import BitrixClient, BitrixApiError
 
 
 class JunkStageTests(unittest.IsolatedAsyncioTestCase):
-    def client(self, status='UC_NLD47X'):
+    def client(self, status='JUNK', reason='2110'):
         client = BitrixClient(webhook_url='https://example.com/rest/1/test/')
-        client._call = AsyncMock(return_value=[
-            {'STATUS_ID': 'JUNK', 'NAME': 'Некачественный лид'},
-            {'STATUS_ID': 'UC_NLD47X', 'NAME': 'Мусор'},
-            {'STATUS_ID': 'UC_JMY93G', 'NAME': 'Мусор', 'SEMANTICS': 'F'},
+        client.get_lead_statuses = AsyncMock(return_value=[
+            {'STATUS_ID': 'JUNK', 'NAME': 'Некачественный лид', 'SEMANTICS': 'F'},
         ])
+        client._call_all = AsyncMock(return_value=[{
+            'FIELD_NAME': 'UF_REASON',
+            'LIST': [
+                {'ID': '2110', 'VALUE': 'Мусор'},
+                {'ID': '2118', 'VALUE': 'Дубль'},
+            ],
+        }])
         client.update_lead = AsyncMock()
-        client.get_lead = AsyncMock(return_value={'ID': '42', 'STATUS_ID': status})
+        client.get_lead = AsyncMock(return_value={
+            'ID': '42', 'STATUS_ID': status, 'UF_REASON': reason,
+        })
         return client
 
-    async def test_uses_real_stage_instead_of_unchecked_configuration(self):
+    @staticmethod
+    def settings():
+        return SimpleNamespace(
+            lead_failed_status_id='JUNK',
+            lead_failure_reason_field='UF_REASON',
+            lead_junk_reason_name='Мусор',
+        )
+
+    async def test_uses_common_failed_stage_with_junk_reason(self):
         client = self.client()
-        lead = await client.move_to_junk('42')
-        client.update_lead.assert_awaited_once_with('42', {'STATUS_ID': 'UC_NLD47X'})
-        self.assertEqual(lead['STATUS_ID'], 'UC_NLD47X')
+        with patch('apps.bot.backend.bitrix_client.get_settings', return_value=self.settings()):
+            lead = await client.move_to_junk('42')
+        client.update_lead.assert_awaited_once_with('42', {
+            'STATUS_ID': 'JUNK', 'UF_REASON': '2110',
+        })
+        self.assertEqual(lead['UF_REASON'], '2110')
 
     async def test_rejects_silent_failure_to_change_stage(self):
         client = self.client(status='NEW')
-        with self.assertRaisesRegex(BitrixApiError, 'не подтвердил'):
-            await client.move_to_junk('42')
+        with patch('apps.bot.backend.bitrix_client.get_settings', return_value=self.settings()):
+            with self.assertRaisesRegex(BitrixApiError, 'не подтвердил'):
+                await client.move_to_junk('42')
 
-    async def test_missing_stage_does_not_modify_lead(self):
+    async def test_missing_failed_stage_does_not_modify_lead(self):
         client = self.client()
-        client._call.return_value = []
-        with self.assertRaises(BitrixApiError):
-            await client.move_to_junk('42')
+        client.get_lead_statuses.return_value = []
+        with patch('apps.bot.backend.bitrix_client.get_settings', return_value=self.settings()):
+            with self.assertRaises(BitrixApiError):
+                await client.move_to_junk('42')
         client.update_lead.assert_not_awaited()
 
-    async def test_two_operational_stages_with_same_name_are_rejected(self):
+    async def test_missing_junk_reason_does_not_modify_lead(self):
         client = self.client()
-        client._call.return_value = [
-            {'STATUS_ID': 'UC_ONE', 'NAME': 'Мусор'},
-            {'STATUS_ID': 'UC_TWO', 'NAME': 'Мусор'},
-        ]
-        with self.assertRaisesRegex(BitrixApiError, 'рабочая стадия'):
-            await client.move_to_junk('42')
+        client._call_all.return_value = [{
+            'FIELD_NAME': 'UF_REASON', 'LIST': [{'ID': '2118', 'VALUE': 'Дубль'}],
+        }]
+        with patch('apps.bot.backend.bitrix_client.get_settings', return_value=self.settings()):
+            with self.assertRaisesRegex(BitrixApiError, 'Мусор'):
+                await client.move_to_junk('42')
         client.update_lead.assert_not_awaited()
 
 
