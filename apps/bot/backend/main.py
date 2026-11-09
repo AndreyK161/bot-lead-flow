@@ -90,9 +90,9 @@ def _mini_app_destination(settings, user_id: int) -> tuple[str, str]:
     switch_user_id = getattr(settings, "mode_switch_user_id", 1297686797)
     identity = planner_access.authorized_identity(user_id)
     if user_id == switch_user_id and store.user_ui_mode(user_id) == "manager":
-        return getattr(settings, "manager_app_url", "https://flow.prav-buro.ru:8443/manager/"), "План дня"
+        return getattr(settings, "manager_app_url", "https://flow.prav-buro.ru/manager/"), "План дня"
     if identity is not None and identity["role"] == "manager":
-        return getattr(settings, "manager_app_url", "https://flow.prav-buro.ru:8443/manager/"), "План дня"
+        return getattr(settings, "manager_app_url", "https://flow.prav-buro.ru/manager/"), "План дня"
     return settings.mini_app_url, "Отчёты"
 
 
@@ -114,7 +114,7 @@ def _mini_app_keyboard(settings, user_id: int) -> dict:
         if current == "supervisor":
             rows.append([{
                 "text": "🗓 Планы сотрудников",
-                "web_app": {"url": getattr(settings, "manager_app_url", "https://flow.prav-buro.ru:8443/manager/")},
+                "web_app": {"url": getattr(settings, "manager_app_url", "https://flow.prav-buro.ru/manager/")},
             }])
         rows.append(_mode_keyboard(current)["inline_keyboard"][0])
         return {"inline_keyboard": rows}
@@ -123,7 +123,7 @@ def _mini_app_keyboard(settings, user_id: int) -> dict:
             "inline_keyboard": [
                 [{
                     "text": "🗓 Планы сотрудников",
-                    "web_app": {"url": getattr(settings, "manager_app_url", "https://flow.prav-buro.ru:8443/manager/")},
+                    "web_app": {"url": getattr(settings, "manager_app_url", "https://flow.prav-buro.ru/manager/")},
                 }],
                 [{"text": "📊 Отчёты Lead Flow", "web_app": {"url": settings.mini_app_url}}],
             ],

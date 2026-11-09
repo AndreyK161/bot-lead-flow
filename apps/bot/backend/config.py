@@ -124,8 +124,8 @@ class Settings(BaseSettings):
     contract_source_url_field: str = "UF_CRM_1775217002"
     deal_refusal_reason_field: str = "UF_CRM_REFUSAL_REASON_OP"
     deal_contract_date_field: str = "UF_CRM_CONTRACT_DATE_OP"
-    mini_app_url: str = "https://flow.prav-buro.ru:8443/miniapp"
-    manager_app_url: str = "https://flow.prav-buro.ru:8443/manager/"
+    mini_app_url: str = "https://flow.prav-buro.ru/miniapp"
+    manager_app_url: str = "https://flow.prav-buro.ru/manager/"
     manager_planner_database_path: str = "data/manager_planner.sqlite3"
     # Explicit opt-in; the core DATABASE_URL does not select Planner storage.
     manager_planner_database_url: str = ""
@@ -150,7 +150,7 @@ class Settings(BaseSettings):
         return bindings
 
     telegram_bot_username: str = "lead_notification_prav_buro_bot"
-    planner_public_url: str = "https://flow.prav-buro.ru:8443"
+    planner_public_url: str = "https://flow.prav-buro.ru"
     telegram_login_max_age_seconds: int = 600
     telegram_web_session_seconds: int = 43200
     mode_switch_user_id: int = 1297686797
