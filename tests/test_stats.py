@@ -15,6 +15,7 @@ class StatsTests(unittest.IsolatedAsyncioTestCase):
             database_path=self.tmp.name + "/db.sqlite",
             track_deal_category_id="0",
             lead_unprocessed_status_id="NEW",
+            lead_handoff_at_field="UF_HANDOFF",
             deal_unprocessed_stage_id="NEW",
             daily_stats_time="19:00",
             daily_stats_timezone="Europe/Moscow",
@@ -70,6 +71,53 @@ class StatsTests(unittest.IsolatedAsyncioTestCase):
         result = await stats.observe("deal", {"ID": "3", "CATEGORY_ID": "6", "STAGE_ID": "NEW"}, client)
         self.assertIsNone(result)
         self.assertEqual(store.rows("SELECT * FROM crm_items"), [])
+
+    async def test_initial_manager_handoff_is_written_to_bitrix(self):
+        client = AsyncMock()
+        client.get_user_name.return_value = "Анна"
+        handed_at = datetime(2026, 11, 9, 12, 30, 45, 123456, tzinfo=ZoneInfo("Europe/Moscow"))
+        item = {"ID": "31", "STATUS_ID": "NEW", "ASSIGNED_BY_ID": "7"}
+
+        await stats.observe("lead", item, client, now=handed_at)
+
+        client.update_lead.assert_awaited_once_with(
+            "31", {"UF_HANDOFF": "2026-11-09T12:30:45+03:00"},
+        )
+        self.assertEqual(item["UF_HANDOFF"], "2026-11-09T12:30:45+03:00")
+
+    async def test_handoff_is_updated_on_reassignment_but_not_other_updates(self):
+        client = AsyncMock()
+        client.get_user_name.side_effect = ["Анна", "Борис"]
+        first_at = datetime(2026, 11, 9, 12, 0, tzinfo=ZoneInfo("Europe/Moscow"))
+        second_at = datetime(2026, 11, 9, 13, 15, tzinfo=ZoneInfo("Europe/Moscow"))
+        first_value = first_at.isoformat()
+        await stats.observe(
+            "lead",
+            {"ID": "32", "STATUS_ID": "NEW", "ASSIGNED_BY_ID": "7", "UF_HANDOFF": first_value},
+            client,
+            now=first_at,
+        )
+        client.update_lead.assert_not_awaited()
+
+        await stats.observe(
+            "lead",
+            {"ID": "32", "STATUS_ID": "NEW", "ASSIGNED_BY_ID": "8", "UF_HANDOFF": first_value},
+            client,
+            now=second_at,
+        )
+        client.update_lead.assert_awaited_once_with(
+            "32", {"UF_HANDOFF": "2026-11-09T13:15:00+03:00"},
+        )
+
+        client.update_lead.reset_mock()
+        await stats.observe(
+            "lead",
+            {"ID": "32", "STATUS_ID": "IN_PROCESS", "ASSIGNED_BY_ID": "8",
+             "UF_HANDOFF": "2026-11-09T13:15:00+03:00"},
+            client,
+            now=second_at + timedelta(minutes=10),
+        )
+        client.update_lead.assert_not_awaited()
 
     def test_daily_report_groups_sources_and_managers(self):
         now = datetime(2026, 9, 21, 10, tzinfo=ZoneInfo("Europe/Moscow"))

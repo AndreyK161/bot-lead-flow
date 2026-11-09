@@ -108,6 +108,7 @@ class Settings(BaseSettings):
     lead_unprocessed_status_id: str = "NEW"
     lead_failed_status_id: str = "JUNK"
     lead_failure_reason_field: str = "UF_CRM_1793868330863"
+    lead_handoff_at_field: str = "UF_CRM_LEADFLOW_HANDOFF_AT"
     lead_junk_reason_name: str = "Мусор"
     lead_duplicate_reason_name: str = "Дубль"
     deal_unprocessed_stage_id: str = "NEW"

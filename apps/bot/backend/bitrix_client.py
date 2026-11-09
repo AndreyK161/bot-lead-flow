@@ -108,6 +108,9 @@ class BitrixClient:
         self._lead_failure_reason_field = str(
             getattr(settings, "lead_failure_reason_field", "UF_CRM_1793868330863")
         )
+        self._lead_handoff_at_field = str(
+            getattr(settings, "lead_handoff_at_field", "UF_CRM_LEADFLOW_HANDOFF_AT")
+        )
         self._deal_refusal_reason_field = str(
             getattr(settings, "deal_refusal_reason_field", "UF_CRM_REFUSAL_REASON_OP")
         )
@@ -155,6 +158,7 @@ class BitrixClient:
     async def get_lead(self, lead_id: str | int) -> dict[str, Any]:
         select = list(dict.fromkeys(LEAD_SELECT_FIELDS + [
             self._lead_failure_reason_field,
+            self._lead_handoff_at_field,
         ]))
         return await self._call("crm.lead.get", {"id": lead_id, "select": select})
 
@@ -563,14 +567,14 @@ class BitrixClient:
         return await self._call_all("crm.lead.list", {
             "order": {"DATE_CREATE": "ASC", "ID": "ASC"},
             "filter": {">=DATE_CREATE": start_iso, "<DATE_CREATE": end_iso},
-            "select": LEAD_SELECT_FIELDS,
+            "select": list(dict.fromkeys(LEAD_SELECT_FIELDS + [self._lead_handoff_at_field])),
         })
 
     async def get_leads_modified_between(self, start_iso: str, end_iso: str) -> list[dict[str, Any]]:
         return await self._call_all("crm.lead.list", {
             "order": {"DATE_MODIFY": "ASC", "ID": "ASC"},
             "filter": {">=DATE_MODIFY": start_iso, "<DATE_MODIFY": end_iso},
-            "select": LEAD_SELECT_FIELDS,
+            "select": list(dict.fromkeys(LEAD_SELECT_FIELDS + [self._lead_handoff_at_field])),
         })
 
     async def get_deals_modified_between(

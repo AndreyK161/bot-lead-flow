@@ -65,6 +65,46 @@ def _event(
     )
 
 
+async def _sync_lead_handoff_at(item: dict, client: BitrixClient) -> None:
+    """Mirror Lead Flow's latest manager handoff timestamp into Bitrix."""
+    if not item.get("ASSIGNED_BY_ID"):
+        return
+    entity_id = str(item["ID"])
+    field_name = str(_setting(
+        "lead_handoff_at_field", "UF_CRM_LEADFLOW_HANDOFF_AT",
+    ))
+    transfer_events = store.rows(
+        """SELECT occurred_at FROM crm_item_events
+           WHERE entity_type='lead' AND entity_id=?
+             AND event_type IN ('assignee_changed','transferred')
+           ORDER BY occurred_at DESC,id DESC LIMIT 1""",
+        (entity_id,),
+    )
+    current = _as_datetime(item.get(field_name))
+    if transfer_events:
+        expected = _as_datetime(transfer_events[0]["occurred_at"])
+    elif current is not None:
+        # Preserve a value already written by Lead Flow if the local tracking
+        # database was rebuilt and no assignment history is available.
+        return
+    else:
+        created_events = store.rows(
+            """SELECT occurred_at FROM crm_item_events
+               WHERE entity_type='lead' AND entity_id=? AND event_type='created'
+               ORDER BY occurred_at DESC,id DESC LIMIT 1""",
+            (entity_id,),
+        )
+        expected = _as_datetime(created_events[0]["occurred_at"]) if created_events else None
+    if expected is None:
+        return
+    expected = expected.replace(microsecond=0)
+    if current is not None and current.replace(microsecond=0) == expected:
+        return
+    value = expected.isoformat()
+    await client.update_lead(entity_id, {field_name: value})
+    item[field_name] = value
+
+
 def record(
     entity_type: str,
     item: dict,
@@ -181,7 +221,12 @@ async def observe(
         source_name = await client.get_source_name(source_id)
     if assignee_id and not assignee_name:
         assignee_name = await client.get_user_name(assignee_id)
-    return record(entity_type, item, source_name=source_name, assignee_name=assignee_name, now=now)
+    tracked = record(
+        entity_type, item, source_name=source_name, assignee_name=assignee_name, now=now,
+    )
+    if entity_type == "lead":
+        await _sync_lead_handoff_at(item, client)
+    return tracked
 
 
 def report_bounds(report_date: date | str) -> tuple[datetime, datetime]:
