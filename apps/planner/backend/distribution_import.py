@@ -1,5 +1,4 @@
 """Idempotent transactional inbox. Only an explicit local call runs imports."""
-import json
 import time
 
 from .distribution_queue import canonical, validate

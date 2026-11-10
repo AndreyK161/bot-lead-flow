@@ -1,10 +1,11 @@
 """Read-only legacy SQLite outbox bridge; not used for new confirmations."""
+import json
 import os
 import sqlite3
 from contextlib import closing
 from pathlib import Path
 
-from apps.shared.distributions import BINDINGS, canonical, validate
+from apps.shared.distributions import canonical, validate
 
 
 class DistributionQueue:

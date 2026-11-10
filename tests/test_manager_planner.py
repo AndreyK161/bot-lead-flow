@@ -192,6 +192,7 @@ class IsolatedManagerPlannerTests(unittest.TestCase):
             }],
         }
         self.assertTrue(queue.publish(value, {8306778724}))
+        self.assertEqual(list(queue.read()), [value])
         self.assertEqual(sync_once(self.store, queue_path, {8306778724}), ['imported'])
         self.assertEqual(sync_once(self.store, queue_path, {8306778724}), [])
         with self.store.connection() as connection:
