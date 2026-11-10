@@ -226,8 +226,15 @@ async def _run_report_job(job_id: str, start: date, end: date) -> None:
 
 
 @router.get("/miniapp", response_class=HTMLResponse)
+@router.get("/miniapp/", response_class=HTMLResponse, include_in_schema=False)
 async def mini_app_page() -> HTMLResponse:
-    return HTMLResponse(HTML_PATH.read_text(encoding="utf-8"))
+    return HTMLResponse(
+        HTML_PATH.read_text(encoding="utf-8"),
+        headers={
+            "Cache-Control": "no-store, no-cache, must-revalidate, max-age=0",
+            "Pragma": "no-cache",
+        },
+    )
 
 
 @router.get("/api/miniapp/report")

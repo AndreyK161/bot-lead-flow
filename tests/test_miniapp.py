@@ -3,6 +3,7 @@ import hmac
 import json
 import time
 import unittest
+import asyncio
 from datetime import date, datetime
 from pathlib import Path
 from types import SimpleNamespace
@@ -31,6 +32,11 @@ def signed_init_data(*, user_id=TEST_USER_ID, auth_date=None, token=BOT_TOKEN):
 
 
 class MiniAppAuthenticationTests(unittest.TestCase):
+    def test_page_disables_browser_and_telegram_webview_caching(self):
+        response = asyncio.run(miniapp.mini_app_page())
+        self.assertIn("no-store", response.headers["cache-control"])
+        self.assertEqual(response.headers["pragma"], "no-cache")
+
     def test_accepts_valid_telegram_init_data_for_test_user(self):
         user = miniapp.validate_init_data(signed_init_data(), BOT_TOKEN)
         self.assertEqual(user["id"], TEST_USER_ID)
