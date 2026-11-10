@@ -25,9 +25,9 @@ class ContractsReportTests(IsolatedAsyncioTestCase):
                 "OPPORTUNITY": amount, "CURRENCY_ID": currency,
             } | fields
 
-        first = contract(1, "10.10")
+        first = contract(1, "10.10400000")
         client.get_contracts_for_report.return_value = [
-            first, first, contract(2, "0.20", UF_DATE=None, DATE_CREATE="2026-11-10"),
+            first, first, contract(2, "0.20100000", UF_DATE=None, DATE_CREATE="2026-11-10"),
             contract(3, "5", "USD"), contract(4, "100", ASSIGNED_BY_ID="8"),
             contract(5, "100", UF_DATE="2026-11-17", DATE_CREATE="2026-11-10"),
             contract(6, None, UTM_SOURCE="unrelated"),
@@ -47,9 +47,9 @@ class ContractsReportTests(IsolatedAsyncioTestCase):
             source_field="UF_LINK",
         )
         self.assertEqual(report, {
-            "count": 4, "missing_amount": 1, "revenue": {"RUB": "10.30", "USD": "5"},
+            "count": 4, "missing_amount": 1, "revenue": {"RUB": "10.31", "USD": "5.00"},
             "sources": [
-                {"name": "Сайт", "count": 3, "missing_amount": 0, "revenue": {"RUB": "10.30", "USD": "5"}},
+                {"name": "Сайт", "count": 3, "missing_amount": 0, "revenue": {"RUB": "10.31", "USD": "5.00"}},
                 {"name": "Без источника", "count": 1, "missing_amount": 1, "revenue": {}},
             ],
         })

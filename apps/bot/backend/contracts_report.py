@@ -2,7 +2,7 @@
 import asyncio
 from collections import defaultdict
 from datetime import date, datetime, time, timedelta
-from decimal import Decimal, InvalidOperation
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation, localcontext
 from zoneinfo import ZoneInfo
 
 from apps.bot.backend.bitrix_client import BitrixClient
@@ -72,7 +72,9 @@ async def collect_contracts_report(manager_id: int, start: date, end: date) -> d
         totals[currency] += amount
 
     def money(values):
-        return {currency: format(amount, "f") for currency, amount in sorted(values.items())}
+        with localcontext() as context:
+            context.rounding = ROUND_HALF_UP
+            return {currency: format(amount, ".2f") for currency, amount in sorted(values.items())}
 
     rows = sorted(groups.values(), key=lambda item: (-item["count"], item["name"]))
     return {
