@@ -267,6 +267,33 @@
           <h3>Стадии обработанных лидов</h3>
           <div id="manager-stage-list" class="manager-stage-list"></div>
         </section>
+        <section class="manager-detail-section" style="margin-top:14px">
+          <h3>Конверсия по стадиям воронки «Продажа»</h3>
+          <p>Сделки с событиями в воронке за выбранный период, по текущему ответственному. Процент — доля сделок на исходной стадии в этой выборке, которые перешли из неё в указанную стадию.</p>
+          <div id="manager-conversion-status" role="status"></div>
+          <div id="manager-conversion-stages"></div>
+        </section>
+        <section class="manager-detail-section" style="margin-top:14px">
+          <h3>Срок сделки до успеха</h3>
+          <p>От создания до первого перехода в «Сделка успешна» в воронке «Продажа». Период — по дате перехода, менеджер — текущий ответственный.</p>
+          <div id="manager-duration-status" role="status"></div>
+          <details id="manager-duration-details" class="hidden">
+            <summary>Сроки по сделкам</summary>
+            <ul id="manager-duration-deals"></ul>
+          </details>
+        </section>
+        <section class="manager-detail-section" style="margin-top:14px">
+          <h3>Договоры и суммы по источникам</h3>
+          <p>Источник и ответственный — из связанной сделки продажи. Сумма — из договора в Bitrix, отдельно по валютам. Договоры без ссылки на продажу и на провальных стадиях не учитываются.</p>
+          <div id="manager-contracts-status" role="status"></div>
+          <ul id="manager-contracts-sources"></ul>
+        </section>
+        <section class="manager-detail-section" style="margin-top:14px">
+          <h3>Причины провала</h3>
+          <p>С какой стадии сделки ушли в отказ. Учитывается последний отказ за период, по текущему ответственному. Если причина не следует из стадии отказа, она отмечается как неизвестная.</p>
+          <div id="manager-losses-status" role="status"></div>
+          <div id="manager-losses-stages"></div>
+        </section>
       </div>
     </section>
 
@@ -660,9 +687,145 @@
         activeManager = null;
       }
 
+      let managerReportVersion = 0;
+      async function loadSalesConversion(manager, params, version) {
+        const status = document.getElementById('manager-conversion-status');
+        const list = document.getElementById('manager-conversion-stages');
+        const isCurrent = () => activeManager === manager && version === managerReportVersion;
+        list.replaceChildren();
+        status.textContent = 'Загружаю историю стадий…';
+        try {
+          const response = await fetch(`/api/miniapp/managers/${manager.bitrix_id}/sales-conversion?${params}`, {headers: requestHeaders()});
+          if (!response.ok) {
+            const body = await response.json().catch(() => ({}));
+            throw new Error(typeof body.detail === 'string' ? body.detail : 'Не удалось загрузить историю стадий');
+          }
+          const result = await response.json();
+          if (!isCurrent()) return;
+          status.textContent = result.deal_count
+            ? `Сделок: ${result.deal_count}${result.missing_history ? ` · Без истории: ${result.missing_history}` : ''}`
+            : 'За этот период сделок нет';
+          for (const stage of result.stages) {
+            if (!stage.count) continue;
+            const title = document.createElement('p');
+            title.textContent = `${stage.name} · ${stage.count}`;
+            list.append(title);
+            for (const move of stage.transitions) {
+              const line = document.createElement('div');
+              line.textContent = `→ ${move.to}: ${move.count} (${move.percent.toLocaleString('ru-RU')} %)`;
+              list.append(line);
+            }
+          }
+        } catch (error) {
+          if (isCurrent()) status.textContent = error.message;
+        }
+      }
+
+      async function loadSalesDuration(manager, params, version) {
+        const status = document.getElementById('manager-duration-status');
+        const details = document.getElementById('manager-duration-details');
+        const list = document.getElementById('manager-duration-deals');
+        const isCurrent = () => activeManager === manager && version === managerReportVersion;
+        const number = value => value.toLocaleString('ru-RU', {maximumFractionDigits: 2});
+        const timestamp = value => `${shortDate(value.slice(0, 10))} ${value.slice(11, 16)}`;
+        details.classList.add('hidden');
+        details.open = false;
+        list.replaceChildren();
+        status.textContent = 'Считаю сроки сделок…';
+        try {
+          const response = await fetch(`/api/miniapp/managers/${manager.bitrix_id}/sales-duration?${params}`, {headers: requestHeaders()});
+          if (!response.ok) {
+            const body = await response.json().catch(() => ({}));
+            throw new Error(typeof body.detail === 'string' ? body.detail : 'Не удалось рассчитать сроки сделок');
+          }
+          const result = await response.json();
+          if (!isCurrent()) return;
+          status.textContent = result.count
+            ? `Сделок: ${result.count} · Среднее: ${number(result.average_days)} дн. · Медиана: ${number(result.median_days)} дн.`
+            : 'За этот период нет сделок с рассчитанным сроком';
+          if (result.missing_dates) status.textContent += ` · Без корректной даты создания: ${result.missing_dates}`;
+          for (const deal of result.deals) {
+            const item = document.createElement('li');
+            item.textContent = `№${deal.deal_id} · ${timestamp(deal.created_at)} → ${timestamp(deal.won_at)} · ${number(deal.days)} дн.`;
+            list.append(item);
+          }
+          details.classList.toggle('hidden', !result.count);
+        } catch (error) {
+          if (isCurrent()) status.textContent = error.message;
+        }
+      }
+
+      async function loadContractsReport(manager, params, version) {
+        const status = document.getElementById('manager-contracts-status');
+        const list = document.getElementById('manager-contracts-sources');
+        const isCurrent = () => activeManager === manager && version === managerReportVersion;
+        const money = amounts => Object.entries(amounts).map(([currency, value]) => {
+          const [whole, fraction] = value.split('.');
+          const amount = BigInt(whole).toLocaleString('ru-RU');
+          return `${whole === '-0' ? '−' : ''}${amount}${fraction ? ',' + fraction : ''} ${currency}`;
+        }).join(' · ') || 'нет сумм';
+        list.replaceChildren();
+        status.textContent = 'Загружаю договоры…';
+        try {
+          const response = await fetch(`/api/miniapp/managers/${manager.bitrix_id}/contracts-by-source?${params}`, {headers: requestHeaders()});
+          if (!response.ok) {
+            const body = await response.json().catch(() => ({}));
+            throw new Error(typeof body.detail === 'string' ? body.detail : 'Не удалось загрузить договоры');
+          }
+          const result = await response.json();
+          if (!isCurrent()) return;
+          status.textContent = result.count
+            ? `Договоров: ${result.count} · Сумма: ${money(result.revenue)}`
+            : 'За этот период договоров нет';
+          if (result.missing_amount) status.textContent += ` · Без суммы или валюты: ${result.missing_amount}`;
+          for (const row of result.sources) {
+            const item = document.createElement('li');
+            item.textContent = `${row.name} · Договоров: ${row.count} · ${money(row.revenue)}`;
+            if (row.missing_amount) item.textContent += ` · Без суммы или валюты: ${row.missing_amount}`;
+            list.append(item);
+          }
+        } catch (error) {
+          if (isCurrent()) status.textContent = error.message;
+        }
+      }
+
+      async function loadSalesLosses(manager, params, version) {
+        const status = document.getElementById('manager-losses-status');
+        const list = document.getElementById('manager-losses-stages');
+        const isCurrent = () => activeManager === manager && version === managerReportVersion;
+        list.replaceChildren();
+        status.textContent = 'Загружаю историю отказов…';
+        try {
+          const response = await fetch(`/api/miniapp/managers/${manager.bitrix_id}/sales-losses?${params}`, {headers: requestHeaders()});
+          if (!response.ok) {
+            const body = await response.json().catch(() => ({}));
+            throw new Error(typeof body.detail === 'string' ? body.detail : 'Не удалось загрузить причины провала');
+          }
+          const result = await response.json();
+          if (!isCurrent()) return;
+          status.textContent = result.count ? `Потеряно сделок: ${result.count}` : 'За этот период отказов нет';
+          for (const stage of result.stages) {
+            const group = document.createElement('details');
+            const title = document.createElement('summary');
+            title.textContent = `${stage.name} · ${stage.count}`;
+            const reasons = document.createElement('ul');
+            for (const reason of stage.reasons) {
+              const item = document.createElement('li');
+              item.textContent = `${reason.name} · ${reason.count}`;
+              reasons.append(item);
+            }
+            group.append(title, reasons);
+            list.append(group);
+          }
+        } catch (error) {
+          if (isCurrent()) status.textContent = error.message;
+        }
+      }
+
       async function loadManagerDetail() {
         const manager = activeManager;
         if (!manager) return;
+        const version = ++managerReportVersion;
         managerDetailContent.classList.add('hidden');
         managerDetailStatus.className = 'manager-detail-status';
         managerDetailStatus.innerHTML = '<span class="spinner"></span>Загружаю статистику…';
@@ -681,6 +844,7 @@
           const response = await fetch(`/api/miniapp/managers/${manager.bitrix_id}/stats?${params}`, {headers: requestHeaders()});
           if (!response.ok) throw new Error('Не удалось загрузить статистику');
           const payload = await response.json();
+          if (activeManager !== manager || version !== managerReportVersion) return;
           managerDetailName.textContent = payload.manager.name;
           managerDetailMeta.textContent = `${presenceLabels[payload.manager.status] || presenceLabels.unknown} · ${shortDate(payload.period.start)} — ${shortDate(payload.period.end)}`;
           document.getElementById('manager-leads').textContent = payload.leads.processed;
@@ -700,7 +864,12 @@
           stageSection.classList.toggle('hidden', stageList.childElementCount === 0);
           managerDetailStatus.textContent = payload.calls.configured ? '' : 'Для менеджера не настроен внутренний номер АТС';
           managerDetailContent.classList.remove('hidden');
+          void loadSalesConversion(manager, params, version);
+          void loadSalesDuration(manager, params, version);
+          void loadContractsReport(manager, params, version);
+          void loadSalesLosses(manager, params, version);
         } catch (error) {
+          if (activeManager !== manager || version !== managerReportVersion) return;
           managerDetailStatus.className = 'manager-detail-status error';
           managerDetailStatus.textContent = error.message;
         }

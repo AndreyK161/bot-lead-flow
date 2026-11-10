@@ -20,7 +20,11 @@ from fastapi.responses import HTMLResponse, Response
 
 from apps.bot.backend.client_registry import build_clients_workbook, collect_clients
 from apps.bot.backend.config import get_settings
+from apps.bot.backend.contracts_report import collect_contracts_report
 from apps.bot.backend.period_reports import collect_live_period
+from apps.bot.backend.sales_conversion import collect_sales_conversion
+from apps.bot.backend.sales_duration import collect_sales_duration
+from apps.bot.backend.sales_losses import collect_sales_losses
 from apps.bot.backend.call_tracking import today_payload
 from apps.bot.backend.worktime import build_worktime_workbook, collect_worktime
 from apps.bot.backend.task_reports import build_task_workbook, collect_task_report
@@ -464,6 +468,48 @@ async def mini_app_manager_presence(request: Request) -> dict:
 
 def _allowed_manager_ids() -> set[int]:
     return set(_manager_bitrix_map().values())
+
+
+def _authorize_manager_report(
+    request: Request, bitrix_user_id: int, start: date, end: date,
+) -> None:
+    _authorized_user(request)
+    if bitrix_user_id not in _allowed_manager_ids():
+        raise HTTPException(status_code=404, detail="Менеджер не найден")
+    if start > end or (end - start).days > 30:
+        raise HTTPException(status_code=400, detail="Выберите период до 31 дня")
+
+
+@router.get("/api/miniapp/managers/{bitrix_user_id}/sales-conversion")
+async def mini_app_sales_conversion(
+    request: Request, bitrix_user_id: int, start: date, end: date,
+) -> dict:
+    _authorize_manager_report(request, bitrix_user_id, start, end)
+    return await collect_sales_conversion(bitrix_user_id, start, end)
+
+
+@router.get("/api/miniapp/managers/{bitrix_user_id}/sales-duration")
+async def mini_app_sales_duration(
+    request: Request, bitrix_user_id: int, start: date, end: date,
+) -> dict:
+    _authorize_manager_report(request, bitrix_user_id, start, end)
+    return await collect_sales_duration(bitrix_user_id, start, end)
+
+
+@router.get("/api/miniapp/managers/{bitrix_user_id}/contracts-by-source")
+async def mini_app_contracts_by_source(
+    request: Request, bitrix_user_id: int, start: date, end: date,
+) -> dict:
+    _authorize_manager_report(request, bitrix_user_id, start, end)
+    return await collect_contracts_report(bitrix_user_id, start, end)
+
+
+@router.get("/api/miniapp/managers/{bitrix_user_id}/sales-losses")
+async def mini_app_sales_losses(
+    request: Request, bitrix_user_id: int, start: date, end: date,
+) -> dict:
+    _authorize_manager_report(request, bitrix_user_id, start, end)
+    return await collect_sales_losses(bitrix_user_id, start, end)
 
 
 @router.get("/api/miniapp/managers/{bitrix_user_id}/stats")

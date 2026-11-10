@@ -667,6 +667,27 @@ class BitrixClient:
             }))
         return result
 
+    async def get_contracts_for_report(
+        self, category_id: str, date_field: str, start_iso: str, end_iso: str, *, source_field: str,
+    ) -> list[dict[str, Any]]:
+        """Find dated contracts plus candidates for the creation-date fallback."""
+        params = {
+            "order": {"ID": "ASC"},
+            "select": ["ID", "DATE_CREATE", "STAGE_ID", "OPPORTUNITY",
+                       "CURRENCY_ID", date_field, source_field],
+        }
+        scope = {"CATEGORY_ID": category_id}
+        dated = await self._call_all("crm.deal.list", {
+            **params,
+            "filter": {**scope, f">={date_field}": start_iso[:10],
+                       f"<{date_field}": end_iso[:10]},
+        })
+        created = await self._call_all("crm.deal.list", {
+            **params,
+            "filter": {**scope, ">=DATE_CREATE": start_iso, "<DATE_CREATE": end_iso},
+        })
+        return list({str(item["ID"]): item for item in [*created, *dated]}.values())
+
     async def get_deals_created_since(
         self, category_id: str, start_iso: str, *, extra_fields: list[str] | None = None,
     ) -> list[dict[str, Any]]:
@@ -693,21 +714,25 @@ class BitrixClient:
         rows: list[dict[str, Any]] = []
         unique_ids = list(dict.fromkeys(str(value) for value in deal_ids if value))
         for offset in range(0, len(unique_ids), 50):
-            start = 0
-            while True:
-                payload = await self._call_payload("crm.stagehistory.list", {
-                    "entityTypeId": 2,
-                    "order": {"CREATED_TIME": "ASC", "ID": "ASC"},
-                    "filter": {"OWNER_ID": unique_ids[offset:offset + 50]},
-                    "select": ["ID", "OWNER_ID", "CREATED_TIME", "STAGE_ID", "CATEGORY_ID"],
-                    "start": start,
-                })
-                result = payload.get("result") or {}
-                rows.extend((result.get("items") or []) if isinstance(result, dict) else result)
-                if "next" not in payload:
-                    break
-                start = int(payload["next"])
+            rows.extend(await self.list_deal_stage_history({"OWNER_ID": unique_ids[offset:offset + 50]}))
         return rows
+
+    async def list_deal_stage_history(self, filters: dict[str, Any]) -> list[dict[str, Any]]:
+        rows: list[dict[str, Any]] = []
+        start = 0
+        while True:
+            payload = await self._call_payload("crm.stagehistory.list", {
+                "entityTypeId": 2,
+                "order": {"CREATED_TIME": "ASC", "ID": "ASC"},
+                "filter": filters,
+                "select": ["ID", "OWNER_ID", "CREATED_TIME", "STAGE_ID", "CATEGORY_ID", "STAGE_SEMANTIC_ID"],
+                "start": start,
+            })
+            result = payload.get("result") or {}
+            rows.extend((result.get("items") or []) if isinstance(result, dict) else result)
+            if payload.get("next") is None:
+                return rows
+            start = int(payload["next"])
 
     async def get_deals_created_between_full(
         self,
