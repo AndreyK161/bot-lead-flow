@@ -166,6 +166,18 @@ class OutcomeTrackingTests(unittest.IsolatedAsyncioTestCase):
         matched = outcomes._match_contracts([contract], sales, "UF_CRM_CONTRACT_URL")
         self.assertEqual(matched["21"]["ID"], "30")
 
+    def test_daily_sync_replays_only_newer_crm_records(self):
+        tracked = {"updated_at": "2026-11-14T10:00:00+03:00"}
+        self.assertFalse(outcomes._crm_record_is_newer(
+            {"DATE_MODIFY": "2026-11-14T10:00:00+03:00"}, tracked,
+        ))
+        self.assertFalse(outcomes._crm_record_is_newer(
+            {"DATE_MODIFY": "2026-11-14T09:59:59+03:00"}, tracked,
+        ))
+        self.assertTrue(outcomes._crm_record_is_newer(
+            {"DATE_MODIFY": "2026-11-14T10:00:01+03:00"}, tracked,
+        ))
+
 
 if __name__ == "__main__":
     unittest.main()

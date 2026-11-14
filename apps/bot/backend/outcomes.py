@@ -104,6 +104,12 @@ def _pick_related_deal(deals: list[dict], existing_id: object, contracts: dict[s
     return max(deals, key=lambda item: int(item["ID"])) if deals else None
 
 
+def _crm_record_is_newer(current: dict, tracked: dict) -> bool:
+    remote_updated = stats._as_datetime(current.get("DATE_MODIFY"))
+    local_updated = stats._as_datetime(tracked.get("updated_at"))
+    return bool(remote_updated and (not local_updated or remote_updated > local_updated))
+
+
 async def sync_once(*, now: datetime | None = None, client: BitrixClient | None = None) -> dict[str, int]:
     """Refresh every tracked item's current CRM outcome and persist human stage names."""
     async with lock:
@@ -141,6 +147,10 @@ async def sync_once(*, now: datetime | None = None, client: BitrixClient | None 
             settings.track_deal_category_id,
         )
         current_leads_by_id = {str(item["ID"]): item for item in current_leads}
+        tracked_by_key = {
+            (str(row["entity_type"]), str(row["entity_id"])): row for row in rows
+        }
+        tracked_deal_ids = {str(row["entity_id"]) for row in deal_rows}
         sales_by_id = {
             str(item["ID"]): item
             for item in [*direct_deals, *related_deals, *contact_deals]
@@ -176,12 +186,20 @@ async def sync_once(*, now: datetime | None = None, client: BitrixClient | None 
             if len(set(lead_ids)) == 1:
                 inferred_lead_by_deal[deal_id] = lead_ids[0]
 
-        # Refresh the normal tracking fields and event history as part of the daily audit.
+        # Reconciliation already keeps normal tracking fields current every few
+        # minutes. Only replay genuinely newer CRM records here; observing every
+        # unchanged item performs thousands of synchronous DB round-trips and can
+        # stall webhook handling for minutes during the daily audit.
         for lead in current_leads:
-            await stats.observe("lead", lead, client)
+            original = tracked_by_key[("lead", str(lead["ID"]))]
+            if _crm_record_is_newer(lead, original):
+                await stats.observe("lead", lead, client)
         for deal in sales_by_id.values():
-            if str(deal["ID"]) in {row["entity_id"] for row in deal_rows}:
-                await stats.observe("deal", deal, client)
+            deal_id = str(deal["ID"])
+            if deal_id in tracked_deal_ids:
+                original = tracked_by_key[("deal", deal_id)]
+                if _crm_record_is_newer(deal, original):
+                    await stats.observe("deal", deal, client)
 
         contract_field = settings.contract_source_url_field
         contract_date_field = getattr(
@@ -219,6 +237,7 @@ async def sync_once(*, now: datetime | None = None, client: BitrixClient | None 
 
         contracts = 0
         converted = 0
+        outcome_updates: list[tuple] = []
         for original in rows:
             original_id = str(original["entity_id"])
             if original["entity_type"] == "lead":
@@ -281,18 +300,22 @@ async def sync_once(*, now: datetime | None = None, client: BitrixClient | None 
                 ) or None
                 if original["entity_type"] == "deal" else original.get("origin_lead_id")
             )
-            store.execute(
-                """UPDATE crm_items SET current_stage_name=?,current_category_id=?,origin_lead_id=?,
-                   linked_deal_id=?,outcome_entity_type=?,outcome_entity_id=?,outcome_category_id=?,
-                   outcome_stage_id=?,outcome_stage_name=?,contract_deal_id=?,contract_at=?,
-                   outcome_checked_at=? WHERE entity_type=? AND entity_id=?""",
+            outcome_updates.append(
                 (
                     current_stage_name, category_id, origin_lead_id,
                     str(related["ID"]) if original["entity_type"] == "lead" and related else original.get("linked_deal_id"),
                     outcome_type, outcome_id, outcome_category, outcome_stage, outcome_name,
                     contract_id, contract_at, checked_at.isoformat(), original["entity_type"], original_id,
-                ),
+                )
             )
+
+        update_sql = """UPDATE crm_items SET current_stage_name=?,current_category_id=?,origin_lead_id=?,
+            linked_deal_id=?,outcome_entity_type=?,outcome_entity_id=?,outcome_category_id=?,
+            outcome_stage_id=?,outcome_stage_name=?,contract_deal_id=?,contract_at=?,
+            outcome_checked_at=? WHERE entity_type=? AND entity_id=?"""
+        with store.transaction() as connection:
+            for params in outcome_updates:
+                connection.execute(update_sql, params)
 
         _save_metadata(SYNC_KEY, checked_at.isoformat())
         result = {"items": len(rows), "converted": converted, "contracts": contracts}
