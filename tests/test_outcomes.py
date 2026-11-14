@@ -24,6 +24,7 @@ class OutcomeTrackingTests(unittest.IsolatedAsyncioTestCase):
             deal_unprocessed_stage_id="NEW",
             daily_stats_timezone="Europe/Moscow",
             outcome_sync_time="03:00",
+            outcome_sync_lookback_days=365,
             director_user_id_set={TEST_DIRECTOR_ID},
         )
         self.patches = [
@@ -53,6 +54,14 @@ class OutcomeTrackingTests(unittest.IsolatedAsyncioTestCase):
                 "DATE_CREATE": "2026-09-20T11:00:00+03:00",
             },
             now=created,
+        )
+        stats.record(
+            "lead",
+            {
+                "ID": "9", "STATUS_ID": "NEW",
+                "DATE_CREATE": "2025-09-19T10:00:00+03:00",
+            },
+            now=datetime(2025, 9, 19, 10, tzinfo=ZoneInfo("Europe/Moscow")),
         )
 
         client = AsyncMock()
@@ -87,6 +96,7 @@ class OutcomeTrackingTests(unittest.IsolatedAsyncioTestCase):
         )
 
         self.assertEqual(result, {"items": 2, "converted": 1, "contracts": 2})
+        client.get_leads_by_ids.assert_awaited_once_with(["10"])
         lead = store.rows("SELECT * FROM crm_items WHERE entity_type='lead' AND entity_id='10'")[0]
         deal = store.rows("SELECT * FROM crm_items WHERE entity_type='deal' AND entity_id='20'")[0]
         self.assertEqual(lead["current_stage_name"], "Качественный лид")

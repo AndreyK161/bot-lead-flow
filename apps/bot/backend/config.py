@@ -120,6 +120,7 @@ class Settings(BaseSettings):
     manual_recovery_max_attempts: int = 5
     manual_recovery_base_delay_seconds: int = 30
     outcome_sync_time: str = "03:00"
+    outcome_sync_lookback_days: int = 365
     accompaniment_deal_category_id: str = "2"
     contract_source_url_field: str = "UF_CRM_1775217002"
     deal_refusal_reason_field: str = "UF_CRM_REFUSAL_REASON_OP"

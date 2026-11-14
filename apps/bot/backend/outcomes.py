@@ -5,7 +5,7 @@ import asyncio
 import logging
 import re
 from collections import Counter
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 from html import escape
 from zoneinfo import ZoneInfo
 
@@ -111,7 +111,12 @@ async def sync_once(*, now: datetime | None = None, client: BitrixClient | None 
         timezone = ZoneInfo(settings.daily_stats_timezone)
         checked_at = (now or datetime.now(timezone)).astimezone(timezone)
         client = client or BitrixClient()
-        rows = store.rows("SELECT * FROM crm_items ORDER BY entity_type,entity_id")
+        lookback_days = max(1, int(getattr(settings, "outcome_sync_lookback_days", 365)))
+        cutoff_date = (checked_at.date() - timedelta(days=lookback_days)).isoformat()
+        rows = store.rows(
+            "SELECT * FROM crm_items WHERE created_date>=? ORDER BY entity_type,entity_id",
+            (cutoff_date,),
+        )
         lead_rows = [row for row in rows if row["entity_type"] == "lead"]
         deal_rows = [row for row in rows if row["entity_type"] == "deal"]
 
@@ -291,7 +296,12 @@ async def sync_once(*, now: datetime | None = None, client: BitrixClient | None 
 
         _save_metadata(SYNC_KEY, checked_at.isoformat())
         result = {"items": len(rows), "converted": converted, "contracts": contracts}
-        logger.info("Daily outcome sync complete %s", result)
+        logger.info(
+            "Daily outcome sync complete %s cutoff_date=%s lookback_days=%s",
+            result,
+            cutoff_date,
+            lookback_days,
+        )
         return result
 
 
