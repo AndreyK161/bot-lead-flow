@@ -621,6 +621,7 @@ class BitrixClient:
             "crm.lead.list", lead_ids,
             list(dict.fromkeys(LEAD_SELECT_FIELDS + [
                 "STATUS_SEMANTIC_ID", self._lead_failure_reason_field,
+                self._lead_handoff_at_field,
             ])),
         )
 

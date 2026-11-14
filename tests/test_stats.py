@@ -6,6 +6,7 @@ from unittest.mock import AsyncMock, patch
 from zoneinfo import ZoneInfo
 
 from apps.bot.backend import stats, store
+from apps.bot.backend.bitrix_client import BitrixTransportError
 
 
 class StatsTests(unittest.IsolatedAsyncioTestCase):
@@ -118,6 +119,21 @@ class StatsTests(unittest.IsolatedAsyncioTestCase):
             now=second_at + timedelta(minutes=10),
         )
         client.update_lead.assert_not_awaited()
+
+    async def test_handoff_transport_failure_does_not_abort_observation(self):
+        client = AsyncMock()
+        client.get_user_name.return_value = "Анна"
+        client.update_lead.side_effect = BitrixTransportError("temporary")
+
+        tracked = await stats.observe(
+            "lead",
+            {"ID": "33", "STATUS_ID": "NEW", "ASSIGNED_BY_ID": "7"},
+            client,
+            now=datetime(2026, 11, 14, 10, 0, tzinfo=ZoneInfo("Europe/Moscow")),
+        )
+
+        self.assertEqual(tracked["entity_id"], "33")
+        client.update_lead.assert_awaited_once()
 
     def test_daily_report_groups_sources_and_managers(self):
         now = datetime(2026, 9, 21, 10, tzinfo=ZoneInfo("Europe/Moscow"))

@@ -9,7 +9,7 @@ from html import escape
 from zoneinfo import ZoneInfo
 
 from apps.bot.backend import store
-from apps.bot.backend.bitrix_client import BitrixClient
+from apps.bot.backend.bitrix_client import BitrixClient, BitrixTransportError
 from apps.bot.backend.config import get_settings
 from apps.bot.backend.telegram_client import send_telegram_message
 
@@ -101,7 +101,17 @@ async def _sync_lead_handoff_at(item: dict, client: BitrixClient) -> None:
     if current is not None and current.replace(microsecond=0) == expected:
         return
     value = expected.isoformat()
-    await client.update_lead(entity_id, {field_name: value})
+    try:
+        await client.update_lead(entity_id, {field_name: value})
+    except BitrixTransportError:
+        # A temporary Bitrix/network failure must not restart an entire daily
+        # audit containing hundreds of leads. The value remains absent in CRM
+        # and will be retried the next time this lead is observed.
+        logger.warning(
+            "Deferred lead handoff sync after Bitrix transport failure entity_id=%s",
+            entity_id,
+        )
+        return
     item[field_name] = value
 
 
